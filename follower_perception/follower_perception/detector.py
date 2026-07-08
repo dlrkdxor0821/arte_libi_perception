@@ -1,0 +1,45 @@
+from .detection import TrackedBox
+from .constants import MIN_CONFIDENCE
+
+
+class Detector:
+    """YOLO11n detection + built-in ByteTrack. Person (class 0) only."""
+
+    def __init__(self, weights='yolo11n.pt', conf=MIN_CONFIDENCE,
+                 tracker_cfg='bytetrack.yaml', device=None):
+        from ultralytics import YOLO
+        self.model = YOLO(weights)
+        self.conf = conf
+        self.tracker_cfg = tracker_cfg
+        self.device = device
+
+    def detect(self, frame):
+        results = self.model.track(
+            frame, persist=True, conf=self.conf, classes=[0],
+            tracker=self.tracker_cfg, verbose=False, device=self.device,
+        )
+        if not results:
+            return []
+        return self._to_tracked_boxes(results[0])
+
+    @staticmethod
+    def _to_tracked_boxes(result):
+        boxes = getattr(result, 'boxes', None)
+        if boxes is None or getattr(boxes, 'id', None) is None:
+            return []
+        xyxy = boxes.xyxy.cpu().numpy()
+        ids = boxes.id.cpu().numpy()
+        confs = boxes.conf.cpu().numpy()
+        out = []
+        for (x1, y1, x2, y2), tid, conf in zip(xyxy, ids, confs):
+            x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
+            w, h = x2 - x1, y2 - y1
+            out.append(TrackedBox(
+                bbox=(x1, y1, x2, y2),
+                cx=(x1 + x2) / 2.0,
+                cy=(y1 + y2) / 2.0,
+                area=w * h,
+                track_id=int(tid),
+                confidence=float(conf),
+            ))
+        return out
