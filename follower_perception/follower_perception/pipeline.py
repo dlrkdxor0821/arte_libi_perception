@@ -131,6 +131,7 @@ class FollowerPerception:
         if pred is None:
             return None
         cx, cy, area = pred
+        area = max(0.0, area)          # prediction can extrapolate area below 0
         return Detection(
             cx=cx, cy=cy, area=area, bbox=self._last_owner.bbox,
             track_id=self._last_owner.track_id, is_owner=True,

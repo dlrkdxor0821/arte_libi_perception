@@ -75,7 +75,7 @@ def draw_overlay(frame, det, *, cands=None, pick=None, cmd=None, status_extra=""
     return vis
 
 
-def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80):
+def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80, cmd_sink=None):
     for frame in frames:
         cmd = poll_cmd(conn) if poll_cmd else None
         if cmd == "register":
@@ -89,6 +89,8 @@ def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80):
         pick = None if perception.matcher.is_registered \
             else perception._pick_central(cands, frame)
         cmd = compute_cmd_vel(det, frame.shape[1])
+        if cmd_sink is not None:                 # optional drive hook (opt-in)
+            cmd_sink(cmd)
         vis = draw_overlay(frame, det, cands=cands, pick=pick, cmd=cmd,
                            status_extra=_status_line(perception.matcher))
         ok, buf = cv2.imencode(".jpg", vis,
@@ -196,7 +198,7 @@ def _rotate_frames(frames, deg):
         yield cv2.rotate(f, rot) if rot is not None else f
 
 
-def _run_local_show(frames, perception):
+def _run_local_show(frames, perception, cmd_sink=None):
     """Local cv2 window (no Qt, no socket). Keys: r=register, x=reset, q/ESC=quit."""
     win = "perception  [r]register [x]reset [q]quit"
     for frame in frames:
@@ -206,6 +208,8 @@ def _run_local_show(frames, perception):
         pick = None if perception.matcher.is_registered \
             else perception._pick_central(cands, frame)
         cmd = compute_cmd_vel(det, frame.shape[1])
+        if cmd_sink is not None:                 # optional drive hook (opt-in)
+            cmd_sink(cmd)
         vis = draw_overlay(frame, det, cands=cands, pick=pick, cmd=cmd,
                            status_extra=_status_line(perception.matcher))
         cv2.imshow(win, vis)
@@ -235,6 +239,9 @@ def main():
                     help="local cv2 window instead of streaming to a viewer")
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
                     help="rotate incoming frames by N degrees (e.g. 180 for upside-down camera)")
+    ap.add_argument("--drive-host", dest="drive_host", default=None,
+                    help="robot IP to send cmd_vel values to (ENABLES driving; omit = preview only)")
+    ap.add_argument("--drive-port", dest="drive_port", type=int, default=6002)
     args = ap.parse_args()
 
     if args.udp:
@@ -251,8 +258,16 @@ def main():
         frames = _rotate_frames(frames, args.rotate)
     perception = _build_perception(args)
 
+    cmd_sink = None
+    if args.drive_host:
+        from scripts.cmd_channel import CmdSender
+        _cmd_sender = CmdSender(args.drive_host, args.drive_port)
+        cmd_sink = lambda c: _cmd_sender.send(c["linear_x"], c["angular_z"])
+        print(f"[ok] DRIVE ON -> cmd_vel to {args.drive_host}:{args.drive_port} "
+              f"(robot must run cmd_bridge)")
+
     if args.show:
-        _run_local_show(frames, perception)
+        _run_local_show(frames, perception, cmd_sink=cmd_sink)
         return
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -266,7 +281,8 @@ def main():
         conn, addr = srv.accept()
         print(f"[ok] viewer connected: {addr}")
         try:
-            serve_loop(conn, frames, perception, poll_cmd=make_socket_poller())
+            serve_loop(conn, frames, perception, poll_cmd=make_socket_poller(),
+                       cmd_sink=cmd_sink)
         finally:
             conn.close()
             print("[..] viewer disconnected; waiting again")

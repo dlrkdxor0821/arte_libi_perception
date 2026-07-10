@@ -41,3 +41,9 @@ def test_far_goes_forward():
 def test_close_goes_backward():
     cmd = compute_cmd_vel(_det(cx=320, area=90000), 640)   # sqrt=300 >> target
     assert cmd["linear_x"] < 0 and cmd["drive"] == "BACK"
+
+
+def test_negative_area_does_not_crash():
+    # the smoother can predict a negative area while coasting -> must not raise
+    cmd = compute_cmd_vel(_det(cx=320, area=-5000), 640)
+    assert cmd["drive"] in ("FWD", "STOP", "BACK")

@@ -35,7 +35,8 @@ def compute_cmd_vel(det, frame_w):
         angular_z, turn = 0.0, "CENTER"
 
     # --- distance: sqrt(area) vs target ---
-    size = float(det.area) ** 0.5
+    # area can be <=0 from the smoother's prediction; clamp so sqrt stays real.
+    size = max(0.0, float(det.area)) ** 0.5
     if size < TARGET_SIZE - SIZE_DEADBAND:
         linear_x, drive = LINEAR_SPEED, "FWD"        # too far -> forward
     elif size > TARGET_SIZE + SIZE_DEADBAND:
