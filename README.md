@@ -1,21 +1,63 @@
 # arte_libi_perception
 
-비전 기반 **사람 추종(person-following)** 시스템. Libi 로봇이 등록된 주인을 따라간다. map-free(순찰/Nav2 제외, 추종만).
-
-두 개의 독립 패키지로 구성되며 `Detection` 계약(JSON)으로만 연결된다.
-
-| 패키지 | 실행 위치 | 역할 | 경계 |
-|---|---|---|---|
-| **`follower_perception`** | AI 서버 (PC/GPU) | 카메라 프레임 → 주인 `Detection` (검출·식별·스무딩) | `frame → Detection` |
-| **`follower_control`** | 중앙 제어기 (ROS 2) | `Detection` + LiDAR `/scan` → `/cmd_vel` (PID·회피·복구BT) | `Detection → cmd_vel` |
+비전 기반 **사람 추종(person-following)** 시스템. **Libi(도서관 사서 로봇)** 가 등록된 방문자를 따라간다. map-free(순찰/Nav2 제외, 추종만).
 
 ```
-[로봇] 카메라 ──UDP영상──► [AI서버] follower_perception ──TCP Detection──► [중앙제어] follower_control ──/cmd_vel(ROS2)──► [로봇] 모터
-[로봇] LiDAR /scan ────────────────────────────────────────────────────► follower_control
+[로봇 Pi] 카메라 ─UDP영상(640/JPEG)→ [AI서버] perception ─위치(Detection)→ 제어 ─/cmd_vel→ [로봇] 모터
+          (YOLO11n + ByteTrack + ReID + HSV)                (PID [+ LiDAR])
 ```
 
-- **AI 서버는 명령하지 않는다** — "보고 식별"만. 주행 명령은 제어기가 만든다.
-- **추종 제어는 map-free** — 상대좌표 PID + LiDAR. Nav2/AMCL/맵 없음.
+- **perception = "보고 식별"** — frame → 주인 한 명의 `Detection`(위치/거리 원천 + 식별). 순수 파이썬, ROS 무관, AI서버(GPU).
+- **control = "주행"** — `Detection`[+ LiDAR `/scan`] → `/cmd_vel`. ROS 2, 로봇 로컬.
+- **AI 서버는 명령하지 않는다** — 제어(특히 LiDAR 20Hz 루프)는 로봇 쪽에 둔다.
+
+---
+
+## 파이프라인 (매 프레임)
+
+```
+YOLO11n(검출)  →  ByteTrack(단기 ID 유지)  →  ReID + HSV(장기 주인 식별, 지속 재검증)  →  BBoxSmoother(coasting)
+                                                         │
+                                            Detection(cx, cy, area, is_owner …)
+```
+- **검출** YOLO11n — 사람 bbox (커스텀 `best.pt`, class 0 = `people`)
+- **식별** ByteTrack(프레임 간 ID) + ReID(OSNet→MobileNet→colour) + HSV 히스토그램 **AND 게이트** — 매 프레임 재검증(잠금 없음)이라 ID 바뀌어도/가려도 외형으로 재식별
+- **대상유지** Track Coasting(α-β 예측 + `COAST_LIMIT`) + Online Gallery(각도별 뷰 축적, `gal=N`)
+- **위치/거리** `Detection`이 `cx`(방위각 원천)·`area`(거리 원천) 출력 → 제어가 해석
+
+---
+
+## 실시간 데모 (perception_server + Qt 뷰어)
+
+```
+camera_sender ─UDP(640·JPEG·최신프레임만)→ perception_server ─TCP JPEG→ Qt viewer(qt_demo)
+                                             등록→ReID 추종→박스·cmd_vel(preview) 오버레이
+```
+- 웹캠(또는 UDP 로봇영상)에서 **[등록] 버튼** → 그 사람만 계속 추종
+- 화면 오버레이: 모든 사람(회색), 등록대상(노랑), 주인(초록 `OWNER`), 3등분 방향선, `reid=/  hsv=/  gal=N`, `cmd_vel(preview) lin.x/ang.z`
+- `cmd_preview.py`가 "발행할 cmd_vel 값"을 계산(거리=`√area` vs `TARGET_SIZE`, 방향=화면 3등분) — 실제 발행 전 미리보기
+
+**실행법은 [`run.md`](run.md) 참고.**
+
+---
+
+## 배포 아키텍처 (실 로봇)
+
+역할 3개: **AI서버(PC/GPU)** = perception, **로봇(Pi)** = 카메라+모터+LiDAR, **뷰어(아무 PC)** = Qt.
+
+로봇을 실제로 구동할 때 — **장애물 회피 여부**로 구조가 갈린다:
+
+| | (A) 회피 없음 — 간단 | (B) 회피 있음 — 제대로 |
+|---|---|---|
+| cmd 계산 | AI서버가 계산 → **`/cmd_vel` 직접** | AI서버는 **Detection만** → Pi의 `follower_control`(LiDAR+PID) |
+| Pi 역할 | 멍청이 (camera_sender + bringup) — Detection 모름 | control까지 (LiDAR·Detection 20Hz 융합) |
+| 안전 | ⚠️ LiDAR 회피 없음, cmd 네트워크 → **끊기면 정지** 필요 | LiDAR 회피 O, 20Hz 루프 로봇 로컬 |
+
+**AI서버→로봇 전달 = ROS or 소켓:**
+- **ROS**: AI서버에 ROS 2 + Pi와 같은 DDS망(또는 `domain_bridge`) → AI서버가 `/cmd_vel`(또는 Detection) **직접 발행**, Pi는 구독만 (글루 최소)
+- **소켓**: AI서버 **ROS-free 유지**(순수 python), Pi에 작은 republish 노드. `follower_control`엔 이미 TCP Detection 수신기(`TcpDetectionSource`, :6000) 있음
+
+> **`/cmd_vel` 자체는 항상 ROS 2** (control→모터, 로봇 로컬). 네트워크로 넘기는 건 작은 **Detection** 또는 **cmd 값**뿐.
 
 ---
 
@@ -23,102 +65,45 @@
 
 ```
 arte_libi_perception/
-├── follower_perception/            # AI 서버 (순수 파이썬, ROS 무관)
-│   ├── follower_perception/        #   detection, detector(YOLO11n+ByteTrack), reid_engine,
-│   │                               #   color_hist, target_matcher, bbox_smoother, pipeline,
-│   │                               #   ai_server(어댑터), constants, mocks
-│   ├── tests/                      #   pytest (30개)
-│   └── bytetrack.yaml
-├── follower_control/               # 중앙 제어 (ROS 2 ament_python)
-│   ├── follower_control/           #   pid, lidar_avoidance, search_planner, state_machine,
-│   │                               #   tracking_controller, bt_searching, control_loop,
-│   │                               #   detection_receiver, + ROS 글루(scan_provider,
-│   │                               #   cmd_publisher, tcp_detection_source, control_node)
-│   ├── tests/                      #   pytest (36개)
-│   └── package.xml / setup.py
-└── docs/
-    ├── superpowers/specs/          # 설계 문서 (Spec 1, Spec 2)
-    ├── superpowers/plans/          # 구현 계획 (TDD)
-    └── hardware-verification-checklist.md
+├── follower_perception/                 # AI 서버 (순수 파이썬, ROS 무관)
+│   ├── follower_perception/             #   detection, constants, color_hist, reid_engine,
+│   │                                    #   detector(YOLO11n+ByteTrack), target_matcher,
+│   │                                    #   bbox_smoother, pipeline, profile, ai_server, mocks
+│   ├── scripts/                         #   perception_server(실시간), camera_sender(로봇 UDP송신),
+│   │                                    #   udp_video, frame_proto, cmd_preview, register_and_track
+│   ├── weights/best.pt                  #   커스텀 person(people) 모델
+│   └── tests/                           #   pytest 67
+├── qt_demo/                             # Qt5 QML+C++ 뷰어 (영상 표시 + 등록/리셋)
+│   ├── CMakeLists.txt · src/ · qml/
+├── follower_control/                    # 중앙 제어 (ROS 2): pid, lidar_avoidance,
+│   └── ...                              #   search_planner, bt_searching, tracking_controller …  (pytest 36)
+├── run.md                               # 실행 명령 모음
+└── docs/superpowers/{specs,plans}/      # 설계·구현 문서
 ```
 
 ---
 
 ## 설치
 
-### AI 서버 (perception)
 ```bash
-pip install numpy opencv-python ultralytics torch    # 필요 시 --break-system-packages
-# (선택) 더 좋은 ReID: pip install torchreid  — 없으면 MobileNet/colour로 폴백
-```
-> `yolo11n.pt`는 최초 실행 시 ultralytics가 자동 다운로드(인터넷 필요). COCO 사전학습에 `person`(class 0)이 있어 **커스텀 학습 없이 사람 검출 가능**.
-
-### 중앙 제어기 (control)
-```bash
-# ROS 2 (예: Jazzy) 설치·source 후
-pip install py_trees transitions numpy               # 필요 시 --break-system-packages
+# AI 서버 (perception) — torch 있는 venv 권장
+pip install numpy opencv-python ultralytics torch     # (선택) torchreid → OSNet(같은 색 구분↑)
+# 중앙 제어 (control)
+pip install py_trees transitions numpy                # + ROS 2 (예: Jazzy)
+# Qt 뷰어
+sudo apt install qtbase5-dev qtdeclarative5-dev cmake g++   # Qt5.15
 ```
 
----
-
-## 테스트 실행 (하드웨어·모델 불필요)
-
-단위 테스트는 ROS·GPU·실모델 없이 돈다 (ReID는 colour 백엔드, detector는 정적 파싱).
+## 테스트 (하드웨어·모델 불필요)
 
 ```bash
-# perception (30개)
-cd follower_perception && python3 -m pytest -v
-
-# control 순수 로직 (36개)
-cd follower_control && python3 -m pytest -v
-```
-> `python3 -m pytest`(모듈 형태)로 실행해야 `import` 경로가 잡힌다. 편집형 설치(`pip install -e .`)는 불필요.
-
----
-
-## 실행 방법
-
-### 1. control 노드 (ROS 2) — 하드웨어 없이 스모크 가능
-```bash
-# 워크스페이스에서 빌드
-colcon build --packages-select follower_control
-source install/setup.bash
-
-# 노드 실행 (기본: TCP :6000 Detection 수신, /scan 구독, /cmd_vel 발행)
-ros2 run follower_control control_node
+cd follower_perception && python3 -m pytest -q        # 67 passed (colour 백엔드, MockDetector)
+cd follower_control    && python3 -m pytest -q        # 36 passed
 ```
 
-**하드웨어 없는 스모크 테스트** (터미널 3개):
-```bash
-# T1) 가짜 Detection 송신 (중앙에 있는 먼 주인 → 전진 기대)
-python3 -c "import socket,json,time; s=socket.socket(); s.connect(('127.0.0.1',6000)); \
-d={'cx':320,'cy':240,'area':100,'bbox':[0,0,10,10],'track_id':1,'is_owner':True,'confidence':0.9,'is_predicted':False}; \
-[ (s.sendall((json.dumps(d)+'\n').encode()), time.sleep(0.05)) for _ in range(200) ]"
+## 실행
 
-# T2) 노드
-ros2 run follower_control control_node
-
-# T3) 결과 관찰
-ros2 topic echo /cmd_vel        # linear.x > 0 (전진) → 송신 중단 시 회전(탐색)
-```
-설정값은 `follower_control/follower_control/config.py` (TCP 포트·토픽명·게인 등).
-
-### 2. perception (AI 서버)
-현재 코어는 라이브러리로 바로 쓸 수 있다:
-```python
-from follower_perception.pipeline import FollowerPerception
-fp = FollowerPerception()               # 실모델(YOLO11n+ReID) 로드
-fp.register(frame)                       # 화면 중앙 사람 등록 (3프레임 안정 시 True)
-fp.run(frame)                            # 매 프레임
-det = fp.get_latest()                    # 주인 Detection 또는 None
-```
-어댑터 `ai_server.AiServer`는 **주입형 전송**(frame_source/result_sink/command_source)을 받는다.
-
-> ⚠️ **아직 연결 필요(deferred):** 실제 **UDP 영상 수신기**와 **TCP Detection 송신기**의 구체 소켓 구현은 로봇 Image Sender 규약 확정 후 작성 예정(Spec 1 계획의 "Deferred"). control 쪽 수신기(`TcpDetectionSource`, TCP 서버)는 구현되어 있으므로, perception 쪽에 "control로 연결하는 TCP 클라이언트 result_sink"만 붙이면 end-to-end가 된다.
-
-### 3. End-to-End (실기기)
-전체 흐름(로봇 카메라 → AI 서버 → 제어기 → 모터) 검증은 ROS·GPU·로봇이 필요하다.
-→ **[실기기 검증 체크리스트](docs/hardware-verification-checklist.md)** 를 따라 단계별로 진행.
+→ **[`run.md`](run.md)** — localhost 데모 / 실 배포 / 오프라인 프로필 검증 명령.
 
 ---
 
@@ -126,19 +111,21 @@ det = fp.get_latest()                    # 주인 Detection 또는 None
 
 | | 상태 |
 |---|---|
-| 설계·계획·구현 | ✅ 두 패키지 완료 |
-| 단위 테스트 | ✅ perception 30 + control 36 = **66 passed** (3회 연속 확인) |
-| ROS 노드 실행 | ⏳ 코드·구문 검증 완료, `ros2` 환경에서 빌드·스모크 필요 |
-| 실모델 추론 | ⏳ 코드 완료, `torch`/`ultralytics` 환경에서 실행 필요 |
-| UDP/TCP 전송 wire | ⏳ 어댑터 주입형까지 완료, 구체 소켓 wire 일부 미연결(위 2번) |
-| 실기기 추종 | ⏳ [체크리스트](docs/hardware-verification-checklist.md)로 검증 예정 |
+| perception 코어 + 지속 ReID + 온라인 갤러리 | ✅ 구현·테스트(67) |
+| UDP 영상 송/수신 (640·JPEG·최신프레임만) | ✅ 구현·localhost 검증 |
+| Qt5 뷰어 (등록/추종/cmd_vel preview) | ✅ 빌드·offscreen 스모크 |
+| 실모델(best.pt)+ReID(MobileNet) 추론 | ✅ venv에서 확인 |
+| control (PID·LiDAR·탐색) | ✅ 구현·테스트(36) — 데모엔 미연결 |
+| **AI서버 → 로봇 `/cmd_vel`(또는 Detection) 발행** | ⏳ **미연결** — ROS 발행 노드 or 소켓 (위 배포 A/B) |
+| 실기기 추종 | ⏳ [체크리스트](docs/hardware-verification-checklist.md)로 검증 |
 
----
+## 남은 링크 / 옵션
+- **로봇 구동 마지막 링크**: AI서버 → `/cmd_vel`(A안, ROS/소켓) **또는** Detection → follower_control(B안). 회피 필요 여부로 선택.
+- (선택) H.264 HW 인코딩(Pi CPU↓, GStreamer 필요) · OSNet(같은 색 옷 구분) · 갤러리 디스크 영속화.
 
 ## 문서
-
-- 설계: [`docs/superpowers/specs/`](docs/superpowers/specs/) — Spec 1(perception), Spec 2(control)
+- 설계: [`docs/superpowers/specs/`](docs/superpowers/specs/) — perception/control/가이드프로필/Qt뷰어
 - 구현 계획(TDD): [`docs/superpowers/plans/`](docs/superpowers/plans/)
 - 실기기 검증: [`docs/hardware-verification-checklist.md`](docs/hardware-verification-checklist.md)
 
-**파라미터는 전부 참고용(튜닝 대상):** perception=`constants.py`, control=`config.py`.
+**파라미터는 전부 튜닝 대상:** perception=`constants.py`(REID/HSV/gallery 임계값)·`cmd_preview.py`(속도·목표거리), control=`config.py`.

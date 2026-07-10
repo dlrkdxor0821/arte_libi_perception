@@ -4,13 +4,13 @@
 MIN_CONFIDENCE = 0.42          # YOLO person confidence floor
 
 # Owner identification (dual gate)
-REID_THRESHOLD = 0.48          # cosine similarity floor
-HSV_THRESHOLD = 0.38           # histogram correlation floor ([0,1])
+REID_THRESHOLD = 0.68          # cosine similarity floor
+HSV_THRESHOLD = 0.45           # histogram correlation floor ([0,1])
 VERIFY_FRAMES = 5              # consecutive passes to lock safe_id
 
 # Online gallery
 CALIBRATION_INTERVAL = 30      # frames between gallery-append attempts
-CALIBRATION_ADD_THRESHOLD = 0.99  # append only if best gallery sim < this
+CALIBRATION_ADD_THRESHOLD = 0.85  # append only if best gallery sim < this
 MAX_GALLERY_SIZE = 50
 
 # Registration

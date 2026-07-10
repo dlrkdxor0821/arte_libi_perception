@@ -3,7 +3,7 @@ import numpy as np
 from .color_hist import hsv_hist, hist_similarity
 from .profile import save_profile, load_profile
 from .constants import (
-    REID_THRESHOLD, HSV_THRESHOLD, VERIFY_FRAMES,
+    REID_THRESHOLD, HSV_THRESHOLD,
     CALIBRATION_ADD_THRESHOLD, MAX_GALLERY_SIZE,
 )
 
@@ -14,21 +14,23 @@ def reid_backend_name(reid):
 
 
 class TargetMatcher:
-    """Identifies the owner among tracked candidates via ReID + HSV dual gate,
-    locking a safe_id after VERIFY_FRAMES and expanding an online gallery.
+    """Identifies the owner among tracked candidates via a ReID + HSV dual gate,
+    re-verified EVERY frame (no permanent lock) so the owner is re-identified by
+    appearance after occlusion / track-id changes and impostors are rejected.
 
-    hsv_threshold: HSV correlation floor. None disables the HSV gate (ReID only)
-    — useful when a single-photo HSV template is fragile under new lighting.
+    reid_threshold / hsv_threshold: per-gate floors. hsv_threshold=None disables
+    the HSV gate (ReID only) — useful when a single-photo HSV template is fragile
+    under new lighting.
     """
 
-    def __init__(self, reid, hsv_threshold=HSV_THRESHOLD):
+    def __init__(self, reid, hsv_threshold=HSV_THRESHOLD, reid_threshold=REID_THRESHOLD):
         self.reid = reid
         self.hsv_threshold = hsv_threshold
+        self.reid_threshold = reid_threshold
         self.template_reid = None
         self.template_hsv = None
         self.gallery = []
-        self.safe_id = None
-        self._verify = {}      # track_id -> consecutive pass count
+        self.safe_id = None            # current owner track_id this frame, or None
         self.last_reid_sim = None
         self.last_hsv_sim = None
 
@@ -41,14 +43,12 @@ class TargetMatcher:
         self.template_hsv = hsv_hist(roi_bgr)
         self.gallery = [self.template_reid]
         self.safe_id = None
-        self._verify.clear()
 
     def reset(self):
         self.template_reid = None
         self.template_hsv = None
         self.gallery = []
         self.safe_id = None
-        self._verify.clear()
 
     def save(self, dir, *, crop_bgr, meta):
         if not self.is_registered:
@@ -93,38 +93,37 @@ class TargetMatcher:
             self.template_reid = self.reid.extract(crop)
             self.gallery = [self.template_reid]
         self.safe_id = None
-        self._verify.clear()
 
     def match(self, cands, frame):
+        """Re-run the ReID+HSV AND gate on every candidate, every frame. The
+        best gate-passing candidate becomes the owner; returns its track_id, or
+        None if none passes (owner not visible this frame). Re-acquisition after
+        occlusion / track-id change is automatic. `last_reid_sim`/`last_hsv_sim`
+        reflect the strongest candidate seen (for on-screen tuning)."""
         if not self.is_registered:
             return None
-        # Fast path: known owner id present this frame.
-        if self.safe_id is not None:
-            for c in cands:
-                if c.track_id == self.safe_id:
-                    return self.safe_id
-            return None
-        # Evaluate candidates against the dual gate.
-        matched = None
+        owner_tid = None
+        owner_score = -1.0
+        best_rs = best_hs = None
+        best_seen = -1.0
         for c in cands:
             roi = self._crop(frame, c.bbox)
             reid_vec = self.reid.extract(roi)
             hsv_vec = hsv_hist(roi)
             reid_sim = max(self.reid.similarity(g, reid_vec) for g in self.gallery)
             hsv_sim = hist_similarity(self.template_hsv, hsv_vec)
-            self.last_reid_sim = reid_sim
-            self.last_hsv_sim = hsv_sim
+            if reid_sim > best_seen:            # strongest candidate (for overlay)
+                best_seen = reid_sim
+                best_rs, best_hs = reid_sim, hsv_sim
             hsv_ok = self.hsv_threshold is None or hsv_sim >= self.hsv_threshold
-            if reid_sim >= REID_THRESHOLD and hsv_ok:
-                cnt = self._verify.get(c.track_id, 0) + 1
-                self._verify[c.track_id] = cnt
-                matched = c.track_id
-                if cnt >= VERIFY_FRAMES:
-                    self.safe_id = c.track_id
-                    return c.track_id
-            else:
-                self._verify[c.track_id] = 0
-        return matched
+            if reid_sim >= self.reid_threshold and hsv_ok and reid_sim > owner_score:
+                owner_tid = c.track_id
+                owner_score = reid_sim
+        if best_rs is not None:
+            self.last_reid_sim = best_rs
+            self.last_hsv_sim = best_hs
+        self.safe_id = owner_tid
+        return owner_tid
 
     def calibrate(self, owner_roi):
         reid_vec = self.reid.extract(owner_roi)

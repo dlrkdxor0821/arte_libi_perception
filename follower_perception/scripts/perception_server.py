@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Perception socket server (B안): owns the webcam, runs FollowerPerception,
+draws boxes, and streams annotated JPEG frames to a Qt viewer over localhost
+TCP. Receives newline commands: register / reset.
+
+Run from the follower_perception/ package root:
+    python scripts/perception_server.py --camera 0 --port 5007
+    python scripts/perception_server.py --test-pattern           # no webcam/torch
+"""
+import argparse
+import os
+import select
+import socket
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import cv2
+import numpy as np
+
+from scripts.frame_proto import send_frame
+from scripts.cmd_preview import compute_cmd_vel
+
+
+def _status_line(matcher):
+    rs, hs = matcher.last_reid_sim, matcher.last_hsv_sim
+    parts = [f"reid={rs:.2f}/{matcher.reid_threshold:.2f}" if rs is not None else "reid=-"]
+    if matcher.hsv_threshold is None:
+        parts.append("hsv=off")
+    else:
+        parts.append(f"hsv={hs:.2f}/{matcher.hsv_threshold:.2f}"
+                     if hs is not None else "hsv=-")
+    parts.append("reg" if matcher.is_registered else "noreg")
+    if matcher.is_registered:
+        parts.append(f"gal={len(matcher.gallery)}")   # online gallery size (grows)
+    if matcher.safe_id is not None:
+        parts.append(f"trk#{matcher.safe_id}")   # ByteTrack id — changing is normal
+    return "  ".join(parts)
+
+
+def draw_overlay(frame, det, *, cands=None, pick=None, cmd=None, status_extra=""):
+    vis = frame.copy()
+    h, w = vis.shape[:2]
+    # thirds guide lines: left / center / right direction zones
+    for x in (w // 3, 2 * w // 3):
+        cv2.line(vis, (x, 0), (x, h), (70, 70, 70), 1)
+    # every YOLO person detection (thin gray) — shows detection runs each frame,
+    # even before registration.
+    for c in (cands or []):
+        x1, y1, x2, y2 = (int(v) for v in c.bbox)
+        is_pick = pick is not None and c.track_id == pick.track_id
+        col = (0, 255, 255) if is_pick else (170, 170, 170)   # pick=yellow
+        cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2 if is_pick else 1)
+        if is_pick:
+            cv2.putText(vis, "register target", (max(0, x1), max(34, y1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 2)
+    # owner box on top (after registration)
+    if det is not None and det.is_owner:
+        x1, y1, x2, y2 = (int(v) for v in det.bbox)
+        color = (0, 165, 255) if det.is_predicted else (0, 255, 0)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        label = "OWNER (predicted)" if det.is_predicted else "OWNER"
+        cv2.putText(vis, label, (max(0, x1), max(20, y1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    elif not (cands or []):
+        cv2.putText(vis, "no detections", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    if cmd is not None:
+        txt = (f"cmd_vel(preview)  lin.x={cmd['linear_x']:+.2f}  "
+               f"ang.z={cmd['angular_z']:+.2f}   [{cmd['drive']} | {cmd['turn']}]")
+        cv2.putText(vis, txt, (10, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+    if status_extra:
+        cv2.putText(vis, status_extra, (10, vis.shape[0] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    return vis
+
+
+def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80):
+    for frame in frames:
+        cmd = poll_cmd(conn) if poll_cmd else None
+        if cmd == "register":
+            perception.register_from_image(frame)
+        elif cmd == "reset":
+            perception.reset()
+        perception.run(frame)
+        det = perception.get_latest()
+        cands = perception.last_cands
+        # before registration, highlight which candidate the 등록 button would pick
+        pick = None if perception.matcher.is_registered \
+            else perception._pick_central(cands, frame)
+        cmd = compute_cmd_vel(det, frame.shape[1])
+        vis = draw_overlay(frame, det, cands=cands, pick=pick, cmd=cmd,
+                           status_extra=_status_line(perception.matcher))
+        ok, buf = cv2.imencode(".jpg", vis,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+        if ok:
+            try:
+                send_frame(conn, buf.tobytes())
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+
+
+def make_socket_poller():
+    """Return a poll_cmd(conn) that non-blockingly reads newline commands."""
+    state = {"buf": b""}
+
+    def poll(conn):
+        r, _, _ = select.select([conn], [], [], 0)
+        if not r:
+            return None
+        try:
+            data = conn.recv(4096)
+        except OSError:
+            return None
+        if not data:
+            return None
+        state["buf"] += data
+        cmd = None
+        while b"\n" in state["buf"]:
+            line, state["buf"] = state["buf"].split(b"\n", 1)
+            line = line.strip().decode(errors="ignore")
+            if line:
+                cmd = line   # last command this tick wins
+        return cmd
+
+    return poll
+
+
+class _AlwaysBox:
+    """Test-pattern detector: always reports one full-frame track."""
+    def detect(self, frame):
+        from follower_perception.detection import TrackedBox
+        h, w = frame.shape[:2]
+        return [TrackedBox(bbox=(w * 0.25, h * 0.2, w * 0.75, h * 0.9),
+                           cx=w / 2, cy=h / 2, area=w * h * 0.3,
+                           track_id=1, confidence=0.9)]
+
+    def reset(self):
+        pass
+
+
+def test_pattern_frames(n=None):
+    """Synthetic BGR frames: a coloured person-ish block on a moving bg.
+    Runs with no webcam and no torch."""
+    i = 0
+    w, h = 640, 480
+    while n is None or i < n:
+        img = np.full((h, w, 3), 30, dtype=np.uint8)
+        cx = int(w * (0.5 + 0.25 * np.sin(i * 0.05)))
+        cv2.rectangle(img, (cx - 60, 120), (cx + 60, 400), (60, 40, 200), -1)
+        yield img
+        i += 1
+
+
+def _camera_frames(index):
+    cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        print(f"[error] cannot open camera {index}"); raise SystemExit(2)
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            yield frame
+    finally:
+        cap.release()
+
+
+def _build_perception(args):
+    from follower_perception.reid_engine import ReIDEngine
+    from follower_perception.pipeline import FollowerPerception
+    if args.test_pattern:
+        reid = ReIDEngine(backend="colour")
+        p = FollowerPerception(detector=_AlwaysBox(), reid=reid)
+    else:
+        try:
+            from follower_perception.detector import Detector
+        except ImportError as e:  # pragma: no cover
+            print(f"[error] ultralytics/torch not installed ({e}). Use "
+                  f"--test-pattern or run in your model venv."); raise SystemExit(2)
+        reid = ReIDEngine(device=args.device)
+        p = FollowerPerception(detector=Detector(device=args.device), reid=reid)
+    if args.no_hsv:
+        p.matcher.hsv_threshold = None
+    elif args.hsv_threshold is not None:
+        p.matcher.hsv_threshold = float(args.hsv_threshold)
+    if args.reid_threshold is not None:
+        p.matcher.reid_threshold = float(args.reid_threshold)
+    return p
+
+
+def _run_local_show(frames, perception):
+    """Local cv2 window (no Qt, no socket). Keys: r=register, x=reset, q/ESC=quit."""
+    win = "perception  [r]register [x]reset [q]quit"
+    for frame in frames:
+        perception.run(frame)
+        det = perception.get_latest()
+        cands = perception.last_cands
+        pick = None if perception.matcher.is_registered \
+            else perception._pick_central(cands, frame)
+        cmd = compute_cmd_vel(det, frame.shape[1])
+        vis = draw_overlay(frame, det, cands=cands, pick=pick, cmd=cmd,
+                           status_extra=_status_line(perception.matcher))
+        cv2.imshow(win, vis)
+        k = cv2.waitKey(1) & 0xFF
+        if k in (ord("q"), 27):
+            break
+        elif k == ord("r"):
+            perception.register_from_image(frame)
+        elif k == ord("x"):
+            perception.reset()
+    cv2.destroyAllWindows()
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Perception socket server (B안)")
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--camera", type=int, default=0)
+    src.add_argument("--test-pattern", dest="test_pattern", action="store_true")
+    src.add_argument("--udp", action="store_true", help="receive video over UDP from robot")
+    ap.add_argument("--port", type=int, default=5007)          # Qt viewer port
+    ap.add_argument("--udp-port", dest="udp_port", type=int, default=6001)  # robot video in
+    ap.add_argument("--device", default=None)
+    ap.add_argument("--hsv-threshold", dest="hsv_threshold", type=float, default=None)
+    ap.add_argument("--reid-threshold", dest="reid_threshold", type=float, default=None)
+    ap.add_argument("--no-hsv", dest="no_hsv", action="store_true")
+    ap.add_argument("--show", action="store_true",
+                    help="local cv2 window instead of streaming to a viewer")
+    args = ap.parse_args()
+
+    if args.udp:
+        from scripts.udp_video import UdpVideoReceiver
+        UdpVideoReceiver  # imported lazily so non-UDP runs need no extra deps
+        _recv = UdpVideoReceiver(args.udp_port)
+        frames = _recv.frames()
+        print(f"[ok] receiving UDP video on :{args.udp_port} (from robot)")
+    elif args.test_pattern:
+        frames = test_pattern_frames()
+    else:
+        frames = _camera_frames(args.camera)
+    perception = _build_perception(args)
+
+    if args.show:
+        _run_local_show(frames, perception)
+        return
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", args.port))
+    srv.listen(1)
+    print(f"[ok] perception server on 127.0.0.1:{args.port} "
+          f"({'test-pattern' if args.test_pattern else f'camera {args.camera}'}); "
+          f"waiting for Qt viewer…")
+    while True:
+        conn, addr = srv.accept()
+        print(f"[ok] viewer connected: {addr}")
+        try:
+            serve_loop(conn, frames, perception, poll_cmd=make_socket_poller())
+        finally:
+            conn.close()
+            print("[..] viewer disconnected; waiting again")
+        if not args.test_pattern:
+            # real camera generator is exhausted once closed; rebuild for next viewer
+            frames = _camera_frames(args.camera)
+
+
+if __name__ == "__main__":
+    main()

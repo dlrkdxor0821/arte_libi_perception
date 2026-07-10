@@ -77,5 +77,6 @@ def test_default_weights_uses_package_relative_when_present(monkeypatch):
 def test_is_person_class0():
     assert is_person_class0({0: "person"}) is True
     assert is_person_class0({0: "Person", 1: "car"}) is True
+    assert is_person_class0({0: "people", 1: "figure"}) is True   # custom best.pt
     assert is_person_class0({0: "car"}) is False
     assert is_person_class0({}) is False

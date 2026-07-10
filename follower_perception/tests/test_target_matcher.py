@@ -56,7 +56,7 @@ def test_calibrate_grows_gallery_for_novel_view():
     m = _matcher()
     m.register(_frame((0, 0, 255)))
     start = len(m.gallery)
-    m.calibrate(_frame((0, 40, 200)))        # different enough -> append
+    m.calibrate(_frame((0, 200, 50)))        # different enough (sim < 0.85) -> append
     assert len(m.gallery) == start + 1
 
 

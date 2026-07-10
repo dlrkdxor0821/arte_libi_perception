@@ -17,6 +17,7 @@ class FollowerPerception:
         self.reid = reid if reid is not None else ReIDEngine()
         self.matcher = TargetMatcher(self.reid)
         self.smoother = BBoxSmoother()
+        self.last_cands = []          # raw YOLO detections from the last run()
         self._last_owner = None       # last TrackedBox seen as owner
         self._miss = 0
         self._frame_count = 0
@@ -104,6 +105,7 @@ class FollowerPerception:
     def run(self, frame):
         self._frame_count += 1
         cands = self.detector.detect(frame)
+        self.last_cands = cands
         owner_id = self.matcher.match(cands, frame)
         if owner_id is not None:
             owner = next(c for c in cands if c.track_id == owner_id)

@@ -17,11 +17,15 @@ def default_weights_path():
     return "yolo11n.pt"
 
 
+PERSON_LABELS = {"person", "people", "pedestrian", "human"}
+
+
 def is_person_class0(names):
-    """True if class index 0 maps to 'person' (case-insensitive)."""
+    """True if class index 0 is a person-like class (person/people/…),
+    case-insensitive. Custom weights may name it 'people' rather than 'person'."""
     if not isinstance(names, dict):
         return False
-    return str(names.get(0, "")).lower() == "person"
+    return str(names.get(0, "")).lower() in PERSON_LABELS
 
 
 class Detector:
