@@ -11,16 +11,31 @@ import os
 import sys
 import time
 
+import cv2
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.udp_video import UdpVideoSender
 from scripts.perception_server import test_pattern_frames, _camera_frames
 
+_ROTATE = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+           270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def _orient(frame, rotate, hflip, vflip):
+    if rotate in _ROTATE:
+        frame = cv2.rotate(frame, _ROTATE[rotate])
+    if hflip:
+        frame = cv2.flip(frame, 1)
+    if vflip:
+        frame = cv2.flip(frame, 0)
+    return frame
+
 
 def _picamera_frames(width=640, height=480):
     """Raspberry Pi CSI camera via libcamera (picamera2). Yields BGR frames.
+    picamera2 'RGB888' returns a BGR-ordered array (OpenCV-compatible), used as-is.
     Run with the SYSTEM python3 (picamera2 is a system package)."""
-    import cv2
     try:
         from picamera2 import Picamera2
     except ImportError:
@@ -29,12 +44,13 @@ def _picamera_frames(width=640, height=480):
         raise SystemExit(2)
     picam2 = Picamera2()
     picam2.configure(picam2.create_preview_configuration(
-        main={"size": (width, height), "format": "XRGB8888"}))
+        main={"size": (width, height), "format": "RGB888"}))
     picam2.start()
+    time.sleep(0.5)                       # sensor warmup / auto-exposure settle
     print("[ok] picamera2 started (libcamera)")
     try:
         while True:
-            yield cv2.cvtColor(picam2.capture_array(), cv2.COLOR_BGRA2BGR)
+            yield picam2.capture_array()  # already BGR-ordered
     finally:
         picam2.stop()
 
@@ -50,6 +66,10 @@ def main():
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--quality", type=int, default=70)
     ap.add_argument("--fps", type=float, default=15.0)   # lower fps = less Pi CPU/bandwidth
+    ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
+                    help="rotate at capture (this Pi CSI cam is upside-down -> 180)")
+    ap.add_argument("--hflip", action="store_true")
+    ap.add_argument("--vflip", action="store_true")
     args = ap.parse_args()
 
     if args.picamera:
@@ -64,7 +84,7 @@ def main():
     n = 0
     try:
         for frame in frames:
-            sender.send(frame)
+            sender.send(_orient(frame, args.rotate, args.hflip, args.vflip))
             n += 1
             if n % 60 == 0:
                 print(f"[..] sent {n} frames")
