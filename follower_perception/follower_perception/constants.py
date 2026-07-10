@@ -5,7 +5,7 @@ MIN_CONFIDENCE = 0.42          # YOLO person confidence floor
 
 # Owner identification (dual gate)
 REID_THRESHOLD = 0.68          # cosine similarity floor
-HSV_THRESHOLD = 0.45           # histogram correlation floor ([0,1])
+HSV_THRESHOLD = 0.30           # histogram correlation floor ([0,1])
 VERIFY_FRAMES = 5              # consecutive passes to lock safe_id
 
 # Online gallery

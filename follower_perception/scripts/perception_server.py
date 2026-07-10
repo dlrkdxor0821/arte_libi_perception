@@ -12,8 +12,11 @@ import os
 import select
 import socket
 import sys
+import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))       # follower_perception/
+sys.path.insert(0, _PKG)
+sys.path.insert(0, os.path.join(os.path.dirname(_PKG), "follower_BT"))   # sibling follower_BT/
 
 import cv2
 import numpy as np
@@ -36,6 +39,14 @@ def _status_line(matcher):
     if matcher.safe_id is not None:
         parts.append(f"trk#{matcher.safe_id}")   # ByteTrack id — changing is normal
     return "  ".join(parts)
+
+
+def _hud_text(img, text, org, color, scale=0.6, thick=2):
+    """Readable HUD text: thick black outline behind, colored text on top (BGR)."""
+    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0),
+                thick + 3, cv2.LINE_AA)
+    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color,
+                thick, cv2.LINE_AA)
 
 
 def draw_overlay(frame, det, *, cands=None, pick=None, cmd=None, status_extra=""):
@@ -62,20 +73,22 @@ def draw_overlay(frame, det, *, cands=None, pick=None, cmd=None, status_extra=""
         label = "OWNER (predicted)" if det.is_predicted else "OWNER"
         cv2.putText(vis, label, (max(0, x1), max(20, y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    elif not (cands or []):
-        cv2.putText(vis, "no detections", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
     if cmd is not None:
-        txt = (f"cmd_vel(preview)  lin.x={cmd['linear_x']:+.2f}  "
-               f"ang.z={cmd['angular_z']:+.2f}   [{cmd['drive']} | {cmd['turn']}]")
-        cv2.putText(vis, txt, (10, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+        state = cmd.get("state", "")
+        scol = {"IDLE": (200, 200, 200), "FOLLOWING": (0, 255, 0),
+                "SEARCHING": (0, 165, 255)}.get(state, (0, 0, 255))
+        _hud_text(vis, f"STATE: {state}", (12, 40), scol, 0.9, 2)      # state (semantic)
+        txt = (f"cmd_vel  lin.x={cmd['linear_x']:+.2f}  ang.z={cmd['angular_z']:+.2f}"
+               f"   [{cmd['drive']} | {cmd['turn']}]")
+        _hud_text(vis, txt, (12, 72), (255, 0, 0), 0.62, 2)            # blue (BGR)
     if status_extra:
-        cv2.putText(vis, status_extra, (10, vis.shape[0] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        _hud_text(vis, status_extra, (12, vis.shape[0] - 12), (0, 0, 255), 0.62, 2)  # red (BGR)
     return vis
 
 
-def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80, cmd_sink=None):
+def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80,
+               cmd_sink=None, policy=None):
+    last_t = time.monotonic()
     for frame in frames:
         cmd = poll_cmd(conn) if poll_cmd else None
         if cmd == "register":
@@ -88,7 +101,10 @@ def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80, cmd_
         # before registration, highlight which candidate the 등록 button would pick
         pick = None if perception.matcher.is_registered \
             else perception._pick_central(cands, frame)
-        cmd = compute_cmd_vel(det, frame.shape[1])
+        now = time.monotonic(); dt = now - last_t; last_t = now
+        cmd = policy.step(det, frame.shape[1], dt,
+                          registered=perception.matcher.is_registered) \
+            if policy is not None else compute_cmd_vel(det, frame.shape[1])
         if cmd_sink is not None:                 # optional drive hook (opt-in)
             cmd_sink(cmd)
         vis = draw_overlay(frame, det, cands=cands, pick=pick, cmd=cmd,
@@ -198,16 +214,20 @@ def _rotate_frames(frames, deg):
         yield cv2.rotate(f, rot) if rot is not None else f
 
 
-def _run_local_show(frames, perception, cmd_sink=None):
+def _run_local_show(frames, perception, cmd_sink=None, policy=None):
     """Local cv2 window (no Qt, no socket). Keys: r=register, x=reset, q/ESC=quit."""
     win = "perception  [r]register [x]reset [q]quit"
+    last_t = time.monotonic()
     for frame in frames:
         perception.run(frame)
         det = perception.get_latest()
         cands = perception.last_cands
         pick = None if perception.matcher.is_registered \
             else perception._pick_central(cands, frame)
-        cmd = compute_cmd_vel(det, frame.shape[1])
+        now = time.monotonic(); dt = now - last_t; last_t = now
+        cmd = policy.step(det, frame.shape[1], dt,
+                          registered=perception.matcher.is_registered) \
+            if policy is not None else compute_cmd_vel(det, frame.shape[1])
         if cmd_sink is not None:                 # optional drive hook (opt-in)
             cmd_sink(cmd)
         vis = draw_overlay(frame, det, cands=cands, pick=pick, cmd=cmd,
@@ -266,8 +286,11 @@ def main():
         print(f"[ok] DRIVE ON -> cmd_vel to {args.drive_host}:{args.drive_port} "
               f"(robot must run cmd_bridge)")
 
+    from follower_BT.recovery import DrivePolicy   # IDLE/FOLLOWING/SEARCHING state machine
+    policy = DrivePolicy(compute_cmd_vel)
+
     if args.show:
-        _run_local_show(frames, perception, cmd_sink=cmd_sink)
+        _run_local_show(frames, perception, cmd_sink=cmd_sink, policy=policy)
         return
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -282,7 +305,7 @@ def main():
         print(f"[ok] viewer connected: {addr}")
         try:
             serve_loop(conn, frames, perception, poll_cmd=make_socket_poller(),
-                       cmd_sink=cmd_sink)
+                       cmd_sink=cmd_sink, policy=policy)
         finally:
             conn.close()
             print("[..] viewer disconnected; waiting again")
