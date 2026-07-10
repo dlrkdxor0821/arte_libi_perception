@@ -66,11 +66,18 @@ def main():
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--quality", type=int, default=70)
     ap.add_argument("--fps", type=float, default=15.0)   # lower fps = less Pi CPU/bandwidth
-    ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
-                    help="rotate at capture (this Pi CSI cam is upside-down -> 180)")
+    ap.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270],
+                    help="rotate at capture. Default: 180 for --picamera (this Pi CSI "
+                         "cam is mounted upside-down), 0 otherwise. Pass --rotate 0 to disable.")
     ap.add_argument("--hflip", action="store_true")
     ap.add_argument("--vflip", action="store_true")
     args = ap.parse_args()
+
+    # This Pi's CSI camera is physically mounted upside-down, so picamera frames
+    # need a 180 rotation by default (matches pinkylib's hardcoded correction).
+    # Still overridable: `--rotate 0` disables it, `--rotate 90/270` picks another angle.
+    if args.rotate is None:
+        args.rotate = 180 if args.picamera else 0
 
     if args.picamera:
         frames = _picamera_frames(args.width, int(args.width * 3 / 4))
