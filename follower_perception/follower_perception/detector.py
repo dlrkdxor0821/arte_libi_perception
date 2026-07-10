@@ -1,14 +1,36 @@
+import os
+
 from .detection import TrackedBox
 from .constants import MIN_CONFIDENCE
+
+
+def default_weights_path():
+    """Resolve YOLO weights portably: env override -> package-relative
+    weights/best.pt if present -> stock yolo11n.pt (auto-download)."""
+    env = os.environ.get("FOLLOWER_WEIGHTS")
+    if env:
+        return env
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.normpath(os.path.join(here, "..", "weights", "best.pt"))
+    if os.path.exists(candidate):
+        return candidate
+    return "yolo11n.pt"
+
+
+def is_person_class0(names):
+    """True if class index 0 maps to 'person' (case-insensitive)."""
+    if not isinstance(names, dict):
+        return False
+    return str(names.get(0, "")).lower() == "person"
 
 
 class Detector:
     """YOLO11n detection + built-in ByteTrack. Person (class 0) only."""
 
-    def __init__(self, weights='yolo11n.pt', conf=MIN_CONFIDENCE,
+    def __init__(self, weights=None, conf=MIN_CONFIDENCE,
                  tracker_cfg='bytetrack.yaml', device=None):
         from ultralytics import YOLO
-        self.model = YOLO(weights)
+        self.model = YOLO(weights or default_weights_path())
         self.conf = conf
         self.tracker_cfg = tracker_cfg
         self.device = device

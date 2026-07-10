@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 from follower_perception.detection import TrackedBox
 from follower_perception.reid_engine import ReIDEngine
@@ -71,3 +73,42 @@ def test_reset_clears_everything():
         p.register(red)
     p.reset()
     assert p.get_latest() is None
+
+
+def test_register_from_image_registers_central_person():
+    p = _perception([])
+    p.detector = MockDetector([[_full_box(1)]])
+    box = p.register_from_image(_frame((0, 0, 255)))
+    assert box is not None
+    assert box.track_id == 1
+    assert p.matcher.is_registered is True
+
+
+def test_register_from_image_no_person_returns_none():
+    p = _perception([])
+    p.detector = MockDetector([[]])
+    assert p.register_from_image(_frame((0, 0, 255))) is None
+    assert p.matcher.is_registered is False
+
+
+def test_save_profile_writes_folder(tmp_path):
+    p = _perception([])
+    p.detector = MockDetector([[_full_box(1)]])
+    p.register_from_image(_frame((0, 0, 255)))
+    d = str(tmp_path / "v1")
+    p.save_profile(d, name="v1", source_image="x.jpg",
+                   registered_at="2026-07-10T00:00:00")
+    assert os.path.exists(os.path.join(d, "crop.jpg"))
+    assert os.path.exists(os.path.join(d, "meta.json"))
+
+
+def test_save_then_load_profile_round_trip(tmp_path):
+    p = _perception([])
+    p.detector = MockDetector([[_full_box(1)]])
+    p.register_from_image(_frame((0, 0, 255)))
+    d = str(tmp_path / "v1")
+    p.save_profile(d, name="v1")
+
+    p2 = _perception([])
+    p2.load_profile(d)
+    assert p2.matcher.is_registered is True

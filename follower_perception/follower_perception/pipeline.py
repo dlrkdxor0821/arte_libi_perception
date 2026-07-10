@@ -22,6 +22,8 @@ class FollowerPerception:
         self._frame_count = 0
         self._reg_id = None
         self._reg_streak = 0
+        self._last_crop = None        # crop of the most recent registration
+        self._last_bbox = None
 
     # ---- registration -------------------------------------------------
     def register(self, frame):
@@ -59,6 +61,44 @@ class FollowerPerception:
             return None
         # nearest to center; larger area breaks ties
         return min(viable, key=lambda c: (abs(c.cx - cx0), -c.area))
+
+    def register_from_image(self, image_bgr):
+        """Register the central person from a SINGLE image (bypasses the
+        3-frame stability requirement). Returns the chosen TrackedBox or None."""
+        cands = self.detector.detect(image_bgr)
+        target = self._pick_central(cands, image_bgr)
+        if target is None:
+            return None
+        roi = TargetMatcher._crop(image_bgr, target.bbox)
+        self.matcher.register(roi)
+        self.smoother.reset()
+        self._last_owner = None
+        self._miss = 0
+        self._reg_id = None
+        self._reg_streak = 0
+        self._last_crop = roi
+        self._last_bbox = list(target.bbox)
+        return target
+
+    def save_profile(self, dir, *, name, source_image=None, registered_at=None):
+        if self._last_crop is None:
+            raise ValueError("no registered crop to save; call register_from_image first")
+        meta = {
+            "name": name,
+            "registered_at": registered_at,
+            "source_image": source_image,
+            "bbox": self._last_bbox,
+        }
+        self.matcher.save(dir, crop_bgr=self._last_crop, meta=meta)
+
+    def load_profile(self, dir, *, strict=False):
+        """Load a saved profile into the matcher so tracking can resume without
+        re-registration. Cross-backend safe (re-extracts from crop)."""
+        self.matcher.load(dir, strict=strict)
+        self.smoother.reset()
+        self._last_owner = None
+        self._miss = 0
+        self._frame_count = 0
 
     # ---- runtime ------------------------------------------------------
     def run(self, frame):

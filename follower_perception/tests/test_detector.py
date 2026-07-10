@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 from follower_perception.detector import Detector
 
@@ -48,3 +50,32 @@ def test_parse_no_ids_returns_empty():
 
 def test_parse_none_boxes_returns_empty():
     assert Detector._to_tracked_boxes(_Result(None)) == []
+
+
+from follower_perception.detector import default_weights_path, is_person_class0
+
+
+def test_default_weights_prefers_env(monkeypatch):
+    monkeypatch.setenv("FOLLOWER_WEIGHTS", "/custom/x.pt")
+    assert default_weights_path() == "/custom/x.pt"
+
+
+def test_default_weights_falls_back_when_absent(monkeypatch):
+    monkeypatch.delenv("FOLLOWER_WEIGHTS", raising=False)
+    monkeypatch.setattr("follower_perception.detector.os.path.exists", lambda p: False)
+    assert default_weights_path() == "yolo11n.pt"
+
+
+def test_default_weights_uses_package_relative_when_present(monkeypatch):
+    monkeypatch.delenv("FOLLOWER_WEIGHTS", raising=False)
+    monkeypatch.setattr("follower_perception.detector.os.path.exists", lambda p: True)
+    got = default_weights_path()
+    assert got.endswith("weights/best.pt")
+    assert os.path.isabs(got)
+
+
+def test_is_person_class0():
+    assert is_person_class0({0: "person"}) is True
+    assert is_person_class0({0: "Person", 1: "car"}) is True
+    assert is_person_class0({0: "car"}) is False
+    assert is_person_class0({}) is False
