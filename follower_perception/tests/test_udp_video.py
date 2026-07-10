@@ -41,6 +41,16 @@ def test_stale_older_frame_dropped():
     assert res is None
 
 
+def test_sender_restart_resyncs():
+    r = FrameReassembler()
+    for c in split_chunks(500, b"old", 1400):   # advance _latest_done to 500
+        r.feed(c)
+    out = None
+    for c in split_chunks(0, b"new", 1400):      # sender restarts at 0 -> must accept
+        out = r.feed(c) or out
+    assert out == b"new"
+
+
 def test_newer_frame_supersedes_partial():
     r = FrameReassembler()
     older = split_chunks(1, b"a" * 3000, 1400)  # 3 chunks

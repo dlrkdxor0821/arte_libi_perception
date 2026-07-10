@@ -189,6 +189,13 @@ def _build_perception(args):
     return p
 
 
+def _rotate_frames(frames, deg):
+    rot = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+           270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(deg)
+    for f in frames:
+        yield cv2.rotate(f, rot) if rot is not None else f
+
+
 def _run_local_show(frames, perception):
     """Local cv2 window (no Qt, no socket). Keys: r=register, x=reset, q/ESC=quit."""
     win = "perception  [r]register [x]reset [q]quit"
@@ -226,6 +233,8 @@ def main():
     ap.add_argument("--no-hsv", dest="no_hsv", action="store_true")
     ap.add_argument("--show", action="store_true",
                     help="local cv2 window instead of streaming to a viewer")
+    ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
+                    help="rotate incoming frames by N degrees (e.g. 180 for upside-down camera)")
     args = ap.parse_args()
 
     if args.udp:
@@ -238,6 +247,8 @@ def main():
         frames = test_pattern_frames()
     else:
         frames = _camera_frames(args.camera)
+    if args.rotate:
+        frames = _rotate_frames(frames, args.rotate)
     perception = _build_perception(args)
 
     if args.show:

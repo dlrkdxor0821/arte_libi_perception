@@ -51,7 +51,11 @@ class FrameReassembler:
             return None
         fid, idx, total = _HDR.unpack(packet[:_HDR.size])
         if fid <= self._latest_done:
-            return None                          # stale -> drop
+            if fid < self._latest_done - 30:     # frame_id jumped back far = sender restart
+                self._buffers.clear()            # -> resync instead of dropping everything
+                self._latest_done = -1
+            else:
+                return None                      # stale/reordered -> drop
         buf = self._buffers.setdefault(fid, {})
         buf[idx] = packet[_HDR.size:]
         if len(buf) >= total:
