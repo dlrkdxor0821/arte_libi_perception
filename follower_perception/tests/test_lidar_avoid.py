@@ -1,6 +1,6 @@
 import math
 from scripts.lidar_avoid import (
-    sector_min, sectors, sectors4, avoid_cmd, STOP_DIST, SIDE_NEAR,
+    sector_min, sectors4, avoid_cmd, STOP_DIST, SIDE_NEAR,
 )
 
 FAR = 5.0
@@ -20,16 +20,6 @@ def test_sector_min_ignores_bad_values():
     ranges = [float("inf"), 0.0, -1.0, 1.5]
     amin, ainc = math.radians(-10), math.radians(10)
     assert sector_min(ranges, amin, ainc, -30, 30) == 1.5     # only the valid one
-
-
-def test_sectors_swap_sides():
-    # obstacle at +45deg -> normally the LEFT sector; swap moves it to RIGHT
-    ranges = [3.0, 3.0, 3.0, 0.4, 3.0]
-    amin, ainc = math.radians(-90), math.radians(45)
-    _, l, r = sectors(ranges, amin, ainc, swap_sides=False)
-    assert l == 0.4 and r == 3.0
-    _, l, r = sectors(ranges, amin, ainc, swap_sides=True)
-    assert l == 3.0 and r == 0.4
 
 
 def test_sectors4_back():
@@ -55,6 +45,14 @@ def test_sectors4_flip_sides():
     assert l == 0.4
     _, _, l, r = sectors4(ranges, amin, ainc, flip_180=True)
     assert r == 0.4                        # 180 flip -> now on the right
+
+
+def test_sectors4_left_is_min_of_three_subsectors():
+    # rays every 45deg from -180: idx 5=+45(좌상), 6=+90(좌), 7=+135(좌하)
+    ranges = [3, 3, 3, 3, 3, 0.9, 0.5, 0.7]
+    amin, ainc = math.radians(-180), math.radians(45)
+    _, _, l, _ = sectors4(ranges, amin, ainc)
+    assert l == 0.5                            # min(좌상=0.9, 좌=0.5, 좌하=0.7)
 
 
 # --- avoid_cmd: brake head-on + gently drift off side walls ---

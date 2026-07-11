@@ -24,9 +24,6 @@ import math
 STOP_DIST = 0.15          # m: block translation if blocked closer than this
 SIDE_NEAR = 0.30          # m: start drifting away from a side wall within this
 SIDE_DRIFT = 0.15         # rad/s: max gentle steer used to weave off the walls
-FRONT_DEG = 30            # front arc half-width (deg)
-BACK_DEG = 30             # back arc half-width around 180 deg
-SIDE_LO, SIDE_HI = 30, 90  # side arc (deg) for left/right (drift + display)
 
 
 def _norm(deg):
@@ -49,29 +46,22 @@ def sector_min(ranges, angle_min, angle_inc, lo_deg, hi_deg):
     return best
 
 
-def sectors(ranges, angle_min, angle_inc, swap_sides=False):
-    """(front, left, right) minimum ranges from a LaserScan.
-
-    swap_sides=True swaps left/right — use it when the LiDAR scans clockwise
-    (RPLidar) or is mounted flipped, so "left" in code = physical left.
-    """
-    front = sector_min(ranges, angle_min, angle_inc, -FRONT_DEG, FRONT_DEG)
-    left = sector_min(ranges, angle_min, angle_inc, SIDE_LO, SIDE_HI)
-    right = sector_min(ranges, angle_min, angle_inc, -SIDE_HI, -SIDE_LO)
-    if swap_sides:
-        left, right = right, left
-    return front, left, right
-
-
 def sectors4(ranges, angle_min, angle_inc, flip_180=False):
-    """(front, back, left, right) minimum ranges (m) — for display + avoidance.
+    """(front, back, left, right) minimum ranges (m) — 8-way coverage.
 
-    flip_180=True is for a LiDAR mounted rotated 180 deg (yaw): it swaps
-    front<->back AND left<->right so the sectors match the robot's own frame.
+    The circle is split into 8 sectors of 45 deg. To keep a diagonal obstacle
+    from slipping through a gap, each side is the MIN over its three sub-sectors:
+        left  = min(front-left, left, back-left)      # 좌상, 좌, 좌하
+        right = min(front-right, right, back-right)    # 우상, 우, 우하
+    front/back stay narrow (±22.5 deg) for head-on braking. flip_180=True swaps
+    front<->back and left<->right (LiDAR mounted rotated 180 deg).
     """
-    front, left, right = sectors(ranges, angle_min, angle_inc)      # raw scan frame
-    back = min(sector_min(ranges, angle_min, angle_inc, 180.0 - BACK_DEG, 180.0),
-               sector_min(ranges, angle_min, angle_inc, -180.0, -(180.0 - BACK_DEG)))
+    def m(lo, hi):
+        return sector_min(ranges, angle_min, angle_inc, lo, hi)
+    front = m(-22.5, 22.5)
+    left = min(m(22.5, 67.5), m(67.5, 112.5), m(112.5, 157.5))          # 좌상 / 좌 / 좌하
+    right = min(m(-67.5, -22.5), m(-112.5, -67.5), m(-157.5, -112.5))   # 우상 / 우 / 우하
+    back = min(m(157.5, 180.0), m(-180.0, -157.5))
     if flip_180:
         front, back = back, front
         left, right = right, left
