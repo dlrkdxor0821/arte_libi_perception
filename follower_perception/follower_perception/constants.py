@@ -9,7 +9,7 @@ HSV_THRESHOLD = 0.30           # histogram correlation floor ([0,1])
 VERIFY_FRAMES = 5              # consecutive passes to lock safe_id
 
 # Online gallery
-CALIBRATION_INTERVAL = 30      # frames between gallery-append attempts
+CALIBRATION_INTERVAL = 15      # frames between online updates (ReID gallery + HSV EMA); ~1s @15fps
 CALIBRATION_ADD_THRESHOLD = 0.85  # append only if best gallery sim < this
 MAX_GALLERY_SIZE = 50
 HSV_UPDATE_ALPHA = 0.1            # online HSV template EMA rate (adapt to lighting; 0 = off)

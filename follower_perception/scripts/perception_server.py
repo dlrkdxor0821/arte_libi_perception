@@ -86,8 +86,13 @@ def draw_overlay(frame, det, *, cands=None, pick=None, cmd=None, status_extra=""
     return vis
 
 
+def _cm(m):
+    """metres -> integer centimetres for the viewer; -1 means no reading."""
+    return -1 if (m is None or not np.isfinite(m)) else int(round(m * 100.0))
+
+
 def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80,
-               cmd_sink=None, policy=None):
+               cmd_sink=None, policy=None, lidar_source=None):
     last_t = time.monotonic()
     for frame in frames:
         cmd = poll_cmd(conn) if poll_cmd else None
@@ -114,6 +119,12 @@ def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80,
         if ok:
             try:
                 send_frame(conn, buf.tobytes())
+                if lidar_source is not None:                 # LiDAR telemetry (display only)
+                    lv = lidar_source.latest()
+                    if lv is not None:
+                        f, b, l, r = lv
+                        send_frame(conn, b"LIDR %d %d %d %d"
+                                   % (_cm(f), _cm(b), _cm(l), _cm(r)))
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
 
@@ -262,6 +273,11 @@ def main():
     ap.add_argument("--drive-host", dest="drive_host", default=None,
                     help="robot IP to send cmd_vel values to (ENABLES driving; omit = preview only)")
     ap.add_argument("--drive-port", dest="drive_port", type=int, default=6002)
+    ap.add_argument("--lidar-ros", dest="lidar_ros", action="store_true",
+                    help="subscribe to /scan via ROS2 and show front/back/left/right in the viewer")
+    ap.add_argument("--scan-topic", dest="scan_topic", default="/scan")
+    ap.add_argument("--lidar-flip", dest="lidar_flip", action="store_true",
+                    help="LiDAR mounted rotated 180 deg (front<->back, left<->right)")
     args = ap.parse_args()
 
     if args.udp:
@@ -289,6 +305,16 @@ def main():
     from follower_BT.recovery import DrivePolicy   # IDLE/FOLLOWING/SEARCHING state machine
     policy = DrivePolicy(compute_cmd_vel)
 
+    lidar_source = None
+    if args.lidar_ros:
+        try:
+            from scripts.scan_ros_source import ScanRosSource
+            lidar_source = ScanRosSource(topic=args.scan_topic, flip_180=args.lidar_flip)
+            print(f"[ok] LiDAR view ON -> {args.scan_topic} via ROS2 "
+                  f"(needs ROS sourced + matching ROS_DOMAIN_ID)")
+        except Exception as e:
+            print(f"[warn] --lidar-ros failed ({e}); continuing WITHOUT LiDAR display")
+
     if args.show:
         _run_local_show(frames, perception, cmd_sink=cmd_sink, policy=policy)
         return
@@ -305,7 +331,7 @@ def main():
         print(f"[ok] viewer connected: {addr}")
         try:
             serve_loop(conn, frames, perception, poll_cmd=make_socket_poller(),
-                       cmd_sink=cmd_sink, policy=policy)
+                       cmd_sink=cmd_sink, policy=policy, lidar_source=lidar_source)
         finally:
             conn.close()
             print("[..] viewer disconnected; waiting again")
