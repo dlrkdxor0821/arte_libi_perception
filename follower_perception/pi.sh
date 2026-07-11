@@ -13,7 +13,7 @@ SESSION="libi_pi"
 
 # ---- edit for your robot (or override via env) ----
 ROS_SETUP="${ROS_SETUP:-/home/pinky/pinky_pro/install/setup.bash}"
-BRINGUP_CMD="${BRINGUP_CMD:-ros2 launch pinky_bringup bringup.launch.py}"   # <-- set your REAL bringup
+BRINGUP_CMD="${BRINGUP_CMD:-ros2 launch pinky_bringup bringup_robot.launch.xml}"
 VIDEO_PORT="${VIDEO_PORT:-6001}"
 CMD_PORT="${CMD_PORT:-6002}"
 CAM_ARGS="${CAM_ARGS:---picamera --fps 15}"
