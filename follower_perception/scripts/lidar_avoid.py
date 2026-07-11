@@ -19,7 +19,7 @@ follow distance so the owner at follow distance doesn't trigger a stop.
 import math
 
 STOP_DIST = 0.10          # m: front/back brake — block translation if closer than this
-SIDE_AVOID = 0.07         # m: a side wall within this -> steer AWAY (and never toward)
+SIDE_AVOID = 0.09         # m: a side wall within this -> steer AWAY (and never toward)
 SIDE_DRIFT = 0.15         # rad/s: angular used to steer away from a side wall
 
 

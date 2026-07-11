@@ -23,7 +23,7 @@ SMOOTHER_ALPHA = 0.45
 SMOOTHER_BETA = 0.15
 FRAME_DT = 0.05                # nominal seconds per frame (20 FPS)
 PREDICT_DT = 0.05             # latency-compensation lookahead
-COAST_LIMIT = 20              # max consecutive missed frames still output (predicted; ~1.3s @15fps)
+COAST_LIMIT = 30              # max consecutive missed frames still output (predicted; ~2s @15fps)
 
 # HSV histogram
 HSV_BINS = 16                 # per channel; total 48-d (H+S+V)
