@@ -76,7 +76,7 @@ def draw_overlay(frame, det, *, cands=None, pick=None, cmd=None, status_extra=""
     if cmd is not None:
         state = cmd.get("state", "")
         scol = {"IDLE": (200, 200, 200), "FOLLOWING": (0, 255, 0),
-                "SEARCHING": (0, 165, 255)}.get(state, (0, 0, 255))
+                "PEEK": (0, 255, 255), "SEARCHING": (0, 165, 255)}.get(state, (0, 0, 255))
         _hud_text(vis, f"STATE: {state}", (12, 40), scol, 0.9, 2)      # state (semantic)
         txt = (f"cmd_vel  lin.x={cmd['linear_x']:+.2f}  ang.z={cmd['angular_z']:+.2f}"
                f"   [{cmd['drive']} | {cmd['turn']}]")
