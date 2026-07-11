@@ -12,6 +12,7 @@ import argparse
 import os
 import socket
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,13 +22,23 @@ import numpy as np
 from scripts.frame_proto import recv_frame
 
 
+def _connect_retry(host, port):
+    """Wait for the server (it opens :port only after loading the model)."""
+    while True:
+        try:
+            return socket.create_connection((host, port), timeout=3)
+        except OSError:
+            print(f"[..] waiting for server {host}:{port} ...")
+            time.sleep(1)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Python viewer for perception_server")
     ap.add_argument("host", nargs="?", default="127.0.0.1")
     ap.add_argument("port", nargs="?", type=int, default=5007)
     args = ap.parse_args()
 
-    sock = socket.create_connection((args.host, args.port))
+    sock = _connect_retry(args.host, args.port)
     print(f"[ok] connected {args.host}:{args.port}   keys: [r]register [x]reset [q]quit")
     win = "perception viewer  [r]register [x]reset [q]quit"
     try:

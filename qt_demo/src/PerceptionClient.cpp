@@ -9,6 +9,12 @@ PerceptionClient::PerceptionClient(FrameImageProvider *provider, QObject *parent
     connect(&m_sock, &QTcpSocket::readyRead, this, &PerceptionClient::onReadyRead);
     connect(&m_sock, &QTcpSocket::connected, this, &PerceptionClient::onConnected);
     connect(&m_sock, &QTcpSocket::disconnected, this, &PerceptionClient::onDisconnected);
+    // server not up yet (connection refused while it loads the model) -> keep retrying
+    connect(&m_sock, &QTcpSocket::errorOccurred, this,
+            [this](QAbstractSocket::SocketError) {
+        if (m_connected) { m_connected = false; emit connectedChanged(); }
+        QTimer::singleShot(1000, this, [this]() { connectTo(m_host, m_port); });
+    });
 }
 
 void PerceptionClient::connectTo(const QString &host, int port) {
