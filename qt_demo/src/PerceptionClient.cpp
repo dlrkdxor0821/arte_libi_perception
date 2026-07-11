@@ -41,10 +41,19 @@ void PerceptionClient::onReadyRead() {
         const quint32 n = (quint8(m_buf[0]) << 24) | (quint8(m_buf[1]) << 16)
                         | (quint8(m_buf[2]) << 8) | quint8(m_buf[3]);
         if (quint32(m_buf.size()) < 4 + n) break;
-        const QByteArray jpeg = m_buf.mid(4, int(n));
+        const QByteArray payload = m_buf.mid(4, int(n));
         m_buf.remove(0, int(4 + n));
+        if (payload.startsWith("LIDR ")) {               // LiDAR telemetry, not a frame
+            const QList<QByteArray> p = payload.mid(5).split(' ');
+            if (p.size() >= 4) {
+                m_lF = p[0].toInt(); m_lB = p[1].toInt();
+                m_lL = p[2].toInt(); m_lR = p[3].toInt();
+                emit lidarChanged();
+            }
+            continue;
+        }
         QImage img;
-        if (img.loadFromData(jpeg, "JPEG") && !img.isNull()) {
+        if (img.loadFromData(payload, "JPEG") && !img.isNull()) {
             m_provider->setImage(img);
             m_counter++;
             if (m_counter == 1 || m_counter % 30 == 0)
