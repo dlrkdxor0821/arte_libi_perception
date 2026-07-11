@@ -1,5 +1,5 @@
 from follower_perception.detection import Detection
-from scripts.cmd_preview import compute_cmd_vel, TARGET_SIZE
+from scripts.cmd_preview import compute_cmd_vel, TARGET_SIZE, SIZE_DEADBAND
 
 
 def _det(cx, area, w=640):
@@ -39,7 +39,8 @@ def test_far_goes_forward():
 
 
 def test_close_goes_backward():
-    cmd = compute_cmd_vel(_det(cx=320, area=90000), 640)   # sqrt=300 >> target
+    close = (TARGET_SIZE + SIZE_DEADBAND + 50) ** 2        # sqrt clearly above deadband
+    cmd = compute_cmd_vel(_det(cx=320, area=close), 640)
     assert cmd["linear_x"] < 0 and cmd["drive"] == "BACK"
 
 

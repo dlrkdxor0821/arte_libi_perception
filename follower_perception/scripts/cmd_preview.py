@@ -15,7 +15,7 @@ Reference for the real values: follower_control/config.py (KP_ANGLE, TARGET_SIZE
 ANGULAR_SPEED = 0.25          # rad/s applied when owner is off-center (matches search)
 LINEAR_SPEED = 0.06           # m/s forward when too far   (was 0.075)
 LINEAR_SPEED_REVERSE = 0.04   # m/s backward when too close (was 0.05)
-TARGET_SIZE = 220.0           # target sqrt(area) in px == desired follow distance
+TARGET_SIZE = 280.0           # target sqrt(area) in px == desired follow distance (closer)
 SIZE_DEADBAND = 30.0          # px band around target where the robot holds (stop)
 
 
