@@ -8,26 +8,19 @@ Rules:
   BRAKE (block translation head-on in the travel direction):
     moving forward & front < STOP_DIST  -> linear_x = 0
     moving back    & back  < STOP_DIST  -> linear_x = 0
-  DRIFT (steer off the CLOSER side wall, whenever moving OR rotating):
-    take whichever side is nearer; if it is within SIDE_NEAR, add a small angular
-    push AWAY from it, proportional to how close it is. Advancing -> it weaves
-    through tight gaps; rotating in place (e.g. turning to face the target) -> it
-    refuses to turn toward a close obstacle.
-  BLOCK: on top of the drift, a rotation toward a wall closer than SIDE_BLOCK is
-  zeroed outright — the robot will not turn to face a very close obstacle even
-  when the follow controller asks it to.
-  Both run whenever the command is non-zero; skipped only when parked (0,0) so it
-  never spins in place when idle.
+  AVOID (side): a wall within SIDE_AVOID overrides the rotation to point AWAY
+    from it, so the robot never turns toward it; if both sides are within, it
+    avoids the closer one. Runs while moving or rotating; skipped when parked
+    (0,0) so it never spins in place when idle.
 
 Note: the followed person is also "in front" — keep STOP_DIST well BELOW the
 follow distance so the owner at follow distance doesn't trigger a stop.
 """
 import math
 
-STOP_DIST = 0.15          # m: block translation if blocked closer than this
-SIDE_NEAR = 0.30          # m: start drifting away from a side wall within this
-SIDE_BLOCK = 0.15         # m: never rotate to FACE a wall closer than this
-SIDE_DRIFT = 0.15         # rad/s: max gentle steer used to weave off the walls
+STOP_DIST = 0.10          # m: front/back brake — block translation if closer than this
+SIDE_AVOID = 0.07         # m: a side wall within this -> steer AWAY (and never toward)
+SIDE_DRIFT = 0.15         # rad/s: angular used to steer away from a side wall
 
 
 def _norm(deg):
@@ -88,41 +81,32 @@ def sectors4(ranges, angle_min, angle_inc, flip_180=False):
     return s["front"], s["back"], left, right
 
 
-def _push(dist, near):
-    """0 (far) .. 1 (touching): how strongly a wall at `dist` should push away."""
-    return 0.0 if dist >= near else (near - dist) / near
-
-
 def avoid_cmd(linear_x, angular_z, front, back, left, right):
-    """Brake head-on + steer away from the closer side wall.
+    """Brake head-on, and steer AWAY from any side wall within SIDE_AVOID.
 
-    Returns (linear_x, angular_z, reason): "clear" | "front" | "back" | "drift".
-    The side steer runs whenever the robot is moving OR rotating (never when
-    parked at 0,0): advancing -> weaves through gaps; rotating-only -> refuses to
-    turn to face a close obstacle. Rotation is only ADDED to, never zeroed.
+    Returns (linear_x, angular_z, reason): "clear" | "front" | "back" | "avoid".
+    A wall within SIDE_AVOID on a side OVERRIDES rotation to point away from it
+    (so it never turns toward it); if both sides are within, it avoids the closer
+    one. Runs while moving or rotating; skipped only when parked (0,0).
     """
     reason = "clear"
-    active = (linear_x != 0.0) or (angular_z != 0.0)     # not parked
+    active = (linear_x != 0.0) or (angular_z != 0.0)     # incoming command, not parked
     if linear_x > 0.0 and front < STOP_DIST:
         linear_x = 0.0
         reason = "front"
     elif linear_x < 0.0 and back < STOP_DIST:
         linear_x = 0.0
         reason = "back"
-    if active:                                           # steer away from closer wall
-        if left < right:
-            drift = -SIDE_DRIFT * _push(left, SIDE_NEAR)     # left nearer -> steer right
-        else:
-            drift = SIDE_DRIFT * _push(right, SIDE_NEAR)     # right nearer -> steer left
-        if drift != 0.0:
-            angular_z += drift
-            if reason == "clear":
-                reason = "drift"
-        # hard rule: never rotate to FACE a wall that is very close
-        if left < SIDE_BLOCK and angular_z > 0.0:            # about to turn toward left
-            angular_z = 0.0
-            reason = "block"
-        if right < SIDE_BLOCK and angular_z < 0.0:           # about to turn toward right
-            angular_z = 0.0
-            reason = "block"
+    if active:
+        l_near = left < SIDE_AVOID
+        r_near = right < SIDE_AVOID
+        if l_near and r_near:
+            angular_z = -SIDE_DRIFT if left <= right else SIDE_DRIFT  # away from closer
+            reason = "avoid"
+        elif l_near:
+            angular_z = -SIDE_DRIFT                       # left wall -> steer right
+            reason = "avoid"
+        elif r_near:
+            angular_z = SIDE_DRIFT                        # right wall -> steer left
+            reason = "avoid"
     return linear_x, angular_z, reason

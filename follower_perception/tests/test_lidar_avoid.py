@@ -1,11 +1,11 @@
 import math
 from scripts.lidar_avoid import (
-    sector_min, sectors4, sectors8, avoid_cmd, STOP_DIST, SIDE_NEAR,
+    sector_min, sectors4, sectors8, avoid_cmd, STOP_DIST, SIDE_AVOID, SIDE_DRIFT,
 )
 
 FAR = 5.0
 BLOCK = STOP_DIST * 0.5             # clearly inside the stop distance
-SIDE_CLOSE = SIDE_NEAR * 0.5       # clearly inside the drift band
+NEAR_SIDE = SIDE_AVOID * 0.5       # clearly inside the side-avoid threshold
 
 
 def test_sector_min_front_only():
@@ -71,7 +71,7 @@ def test_sectors4_left_is_min_of_three_subsectors():
     assert l == 0.5                            # min(좌상=0.9, 좌=0.5, 좌하=0.7)
 
 
-# --- avoid_cmd: brake head-on + gently drift off side walls ---
+# --- avoid_cmd: brake head-on + steer away from a side wall within SIDE_AVOID ---
 
 def test_clear_passes_through():
     lin, ang, r = avoid_cmd(0.06, 0.1, front=FAR, back=FAR, left=FAR, right=FAR)
@@ -98,48 +98,35 @@ def test_reverse_ignores_front():
     assert lin == -0.04 and r == "clear"                # front irrelevant reversing
 
 
-def test_left_wall_drifts_right():
-    lin, ang, r = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=SIDE_CLOSE, right=FAR)
-    assert ang < 0 and lin == 0.06 and r == "drift"     # left wall -> steer right
+def test_left_wall_steers_right():
+    lin, ang, r = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=NEAR_SIDE, right=FAR)
+    assert ang == -SIDE_DRIFT and lin == 0.06 and r == "avoid"   # left -> steer right
 
 
-def test_right_wall_drifts_left():
-    lin, ang, r = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=FAR, right=SIDE_CLOSE)
-    assert ang > 0 and r == "drift"                     # right wall -> steer left
+def test_right_wall_steers_left():
+    lin, ang, r = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=FAR, right=NEAR_SIDE)
+    assert ang == SIDE_DRIFT and r == "avoid"                    # right -> steer left
 
 
-def test_closer_wall_wins():
-    # both within the band, LEFT closer -> steer right (away from the closer wall)
-    lin, ang, r = avoid_cmd(0.06, 0.0, front=FAR, back=FAR,
-                            left=SIDE_NEAR * 0.3, right=SIDE_NEAR * 0.7)
-    assert ang < 0 and r == "drift"
+def test_both_sides_avoid_the_closer():
+    # both within SIDE_AVOID, LEFT closer -> steer right (away from left)
+    lin, ang, r = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=0.03, right=0.05)
+    assert ang == -SIDE_DRIFT and r == "avoid"
 
 
-def test_drift_scales_with_closeness():
-    _, near_ang, _ = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=SIDE_NEAR * 0.2, right=FAR)
-    _, far_ang, _ = avoid_cmd(0.06, 0.0, front=FAR, back=FAR, left=SIDE_NEAR * 0.8, right=FAR)
-    assert abs(near_ang) > abs(far_ang)                 # closer wall -> stronger drift
+def test_avoid_overrides_turn_toward_wall():
+    # rotating left toward a near left wall -> overridden to steer right (away)
+    lin, ang, r = avoid_cmd(0.0, 0.3, front=FAR, back=FAR, left=NEAR_SIDE, right=FAR)
+    assert ang == -SIDE_DRIFT and r == "avoid"
 
 
-def test_stopped_but_rotating_avoids_facing_obstacle():
-    # not advancing, but rotating toward a close LEFT wall -> steer countered
-    lin, ang, r = avoid_cmd(0.0, 0.3, front=FAR, back=FAR, left=SIDE_CLOSE, right=FAR)
-    assert lin == 0.0 and ang < 0.3 and r == "drift"    # leftward turn reduced
+def test_outside_threshold_no_side_effect():
+    # side wall just outside SIDE_AVOID -> command untouched
+    lin, ang, r = avoid_cmd(0.06, 0.3, front=FAR, back=FAR, left=SIDE_AVOID + 0.05, right=FAR)
+    assert ang == 0.3 and r == "clear"
 
 
-def test_parked_never_drifts():
-    # fully idle (0,0) -> never spin, even with a close side obstacle
-    lin, ang, r = avoid_cmd(0.0, 0.0, front=FAR, back=FAR, left=SIDE_CLOSE, right=FAR)
+def test_parked_no_side_avoid():
+    # fully idle (0,0) -> never steer, even with a very close side wall
+    lin, ang, r = avoid_cmd(0.0, 0.0, front=FAR, back=FAR, left=NEAR_SIDE, right=FAR)
     assert lin == 0.0 and ang == 0.0 and r == "clear"
-
-
-def test_wont_face_a_very_close_wall():
-    # rotating left toward a wall closer than SIDE_BLOCK -> leftward turn zeroed
-    lin, ang, r = avoid_cmd(0.0, 0.3, front=FAR, back=FAR, left=0.05, right=FAR)
-    assert ang <= 0.0 and r == "block"        # no longer turns to face it
-
-
-def test_block_allows_turning_away():
-    # very close LEFT wall but turning RIGHT (away) -> not blocked
-    lin, ang, r = avoid_cmd(0.0, -0.3, front=FAR, back=FAR, left=0.05, right=FAR)
-    assert ang < 0.0                          # still allowed to turn away
