@@ -8,13 +8,16 @@ Rules:
   BRAKE (block translation head-on in the travel direction):
     moving forward & front < STOP_DIST  -> linear_x = 0
     moving back    & back  < STOP_DIST  -> linear_x = 0
-  DRIFT (while advancing, gently steer off the CLOSER side wall so it weaves
-  through tight gaps instead of stalling):
+  DRIFT (steer off the CLOSER side wall, whenever moving OR rotating):
     take whichever side is nearer; if it is within SIDE_NEAR, add a small angular
-    push AWAY from it, proportional to how close it is. As the robot drifts the
-    other wall becomes the nearer one -> it steers back -> it weaves through.
-  angular_z is only ADDED to (never zeroed), so target-facing rotation survives.
-  Drift acts only while advancing (linear_x > 0) -> no spinning when idle.
+    push AWAY from it, proportional to how close it is. Advancing -> it weaves
+    through tight gaps; rotating in place (e.g. turning to face the target) -> it
+    refuses to turn toward a close obstacle.
+  BLOCK: on top of the drift, a rotation toward a wall closer than SIDE_BLOCK is
+  zeroed outright — the robot will not turn to face a very close obstacle even
+  when the follow controller asks it to.
+  Both run whenever the command is non-zero; skipped only when parked (0,0) so it
+  never spins in place when idle.
 
 Note: the followed person is also "in front" — keep STOP_DIST well BELOW the
 follow distance so the owner at follow distance doesn't trigger a stop.
@@ -23,6 +26,7 @@ import math
 
 STOP_DIST = 0.15          # m: block translation if blocked closer than this
 SIDE_NEAR = 0.30          # m: start drifting away from a side wall within this
+SIDE_BLOCK = 0.15         # m: never rotate to FACE a wall closer than this
 SIDE_DRIFT = 0.15         # rad/s: max gentle steer used to weave off the walls
 
 
@@ -46,26 +50,42 @@ def sector_min(ranges, angle_min, angle_inc, lo_deg, hi_deg):
     return best
 
 
-def sectors4(ranges, angle_min, angle_inc, flip_180=False):
-    """(front, back, left, right) minimum ranges (m) — 8-way coverage.
-
-    The circle is split into 8 sectors of 45 deg. To keep a diagonal obstacle
-    from slipping through a gap, each side is the MIN over its three sub-sectors:
-        left  = min(front-left, left, back-left)      # 좌상, 좌, 좌하
-        right = min(front-right, right, back-right)    # 우상, 우, 우하
-    front/back stay narrow (±22.5 deg) for head-on braking. flip_180=True swaps
-    front<->back and left<->right (LiDAR mounted rotated 180 deg).
+def sectors8(ranges, angle_min, angle_inc, flip_180=False):
+    """The eight 45-deg sectors as a dict, keyed:
+        front / front_left / left / back_left / back / back_right / right / front_right
+    flip_180=True remaps each sector to its 180-deg opposite (LiDAR mounted flipped).
     """
     def m(lo, hi):
         return sector_min(ranges, angle_min, angle_inc, lo, hi)
-    front = m(-22.5, 22.5)
-    left = min(m(22.5, 67.5), m(67.5, 112.5), m(112.5, 157.5))          # 좌상 / 좌 / 좌하
-    right = min(m(-67.5, -22.5), m(-112.5, -67.5), m(-157.5, -112.5))   # 우상 / 우 / 우하
-    back = min(m(157.5, 180.0), m(-180.0, -157.5))
-    if flip_180:
-        front, back = back, front
-        left, right = right, left
-    return front, back, left, right
+    s = {
+        "front":       m(-22.5, 22.5),
+        "front_left":  m(22.5, 67.5),
+        "left":        m(67.5, 112.5),
+        "back_left":   m(112.5, 157.5),
+        "back":        min(m(157.5, 180.0), m(-180.0, -157.5)),
+        "back_right":  m(-157.5, -112.5),
+        "right":       m(-112.5, -67.5),
+        "front_right": m(-67.5, -22.5),
+    }
+    if flip_180:                                   # each sector <- its 180-deg opposite
+        s = {
+            "front":       s["back"],       "back":        s["front"],
+            "left":        s["right"],      "right":       s["left"],
+            "front_left":  s["back_right"], "back_right":  s["front_left"],
+            "front_right": s["back_left"],  "back_left":   s["front_right"],
+        }
+    return s
+
+
+def sectors4(ranges, angle_min, angle_inc, flip_180=False):
+    """(front, back, left, right) for avoidance. left/right = MIN over their three
+    sub-sectors so a diagonal obstacle can't slip a gap; front/back stay narrow
+    (±22.5 deg) for head-on braking. See sectors8 for the full breakdown.
+    """
+    s = sectors8(ranges, angle_min, angle_inc, flip_180=flip_180)
+    left = min(s["front_left"], s["left"], s["back_left"])
+    right = min(s["front_right"], s["right"], s["back_right"])
+    return s["front"], s["back"], left, right
 
 
 def _push(dist, near):
@@ -74,21 +94,22 @@ def _push(dist, near):
 
 
 def avoid_cmd(linear_x, angular_z, front, back, left, right):
-    """Brake head-on + gently drift off side walls (weave through tight gaps).
+    """Brake head-on + steer away from the closer side wall.
 
     Returns (linear_x, angular_z, reason): "clear" | "front" | "back" | "drift".
-    Rotation is only ADDED to (never zeroed), so target-facing is preserved.
+    The side steer runs whenever the robot is moving OR rotating (never when
+    parked at 0,0): advancing -> weaves through gaps; rotating-only -> refuses to
+    turn to face a close obstacle. Rotation is only ADDED to, never zeroed.
     """
     reason = "clear"
-    moving_fwd = linear_x > 0.0
-    if moving_fwd and front < STOP_DIST:
+    active = (linear_x != 0.0) or (angular_z != 0.0)     # not parked
+    if linear_x > 0.0 and front < STOP_DIST:
         linear_x = 0.0
         reason = "front"
     elif linear_x < 0.0 and back < STOP_DIST:
         linear_x = 0.0
         reason = "back"
-    if moving_fwd:                                   # weave only while advancing
-        # steer away from whichever wall is CLOSER, proportional to how close
+    if active:                                           # steer away from closer wall
         if left < right:
             drift = -SIDE_DRIFT * _push(left, SIDE_NEAR)     # left nearer -> steer right
         else:
@@ -97,4 +118,11 @@ def avoid_cmd(linear_x, angular_z, front, back, left, right):
             angular_z += drift
             if reason == "clear":
                 reason = "drift"
+        # hard rule: never rotate to FACE a wall that is very close
+        if left < SIDE_BLOCK and angular_z > 0.0:            # about to turn toward left
+            angular_z = 0.0
+            reason = "block"
+        if right < SIDE_BLOCK and angular_z < 0.0:           # about to turn toward right
+            angular_z = 0.0
+            reason = "block"
     return linear_x, angular_z, reason

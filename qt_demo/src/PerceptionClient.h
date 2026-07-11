@@ -14,6 +14,10 @@ class PerceptionClient : public QObject {
     Q_PROPERTY(int lidarBack READ lidarBack NOTIFY lidarChanged)
     Q_PROPERTY(int lidarLeft READ lidarLeft NOTIFY lidarChanged)
     Q_PROPERTY(int lidarRight READ lidarRight NOTIFY lidarChanged)
+    Q_PROPERTY(int lidarFrontLeft READ lidarFrontLeft NOTIFY lidarChanged)
+    Q_PROPERTY(int lidarFrontRight READ lidarFrontRight NOTIFY lidarChanged)
+    Q_PROPERTY(int lidarBackLeft READ lidarBackLeft NOTIFY lidarChanged)
+    Q_PROPERTY(int lidarBackRight READ lidarBackRight NOTIFY lidarChanged)
 public:
     explicit PerceptionClient(FrameImageProvider *provider, QObject *parent = nullptr);
     bool connected() const { return m_connected; }
@@ -22,6 +26,10 @@ public:
     int lidarBack() const { return m_lB; }
     int lidarLeft() const { return m_lL; }
     int lidarRight() const { return m_lR; }
+    int lidarFrontLeft() const { return m_lFL; }
+    int lidarFrontRight() const { return m_lFR; }
+    int lidarBackLeft() const { return m_lBL; }
+    int lidarBackRight() const { return m_lBR; }
     Q_INVOKABLE void connectTo(const QString &host, int port);
     Q_INVOKABLE void doRegister();
     Q_INVOKABLE void doReset();
@@ -41,6 +49,7 @@ private:
     bool m_connected = false;
     int m_counter = 0;
     int m_lF = -1, m_lB = -1, m_lL = -1, m_lR = -1;   // LiDAR cm, -1 = no reading
+    int m_lFL = -1, m_lFR = -1, m_lBL = -1, m_lBR = -1;   // diagonals
     QString m_host;
     int m_port = 5007;
 };

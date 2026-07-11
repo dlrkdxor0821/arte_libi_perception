@@ -22,8 +22,8 @@ QT_BEGIN_MOC_NAMESPACE
 QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 struct qt_meta_stringdata_PerceptionClient_t {
-    QByteArrayData data[19];
-    char stringdata0[204];
+    QByteArrayData data[23];
+    char stringdata0[264];
 };
 #define QT_MOC_LITERAL(idx, ofs, len) \
     Q_STATIC_BYTE_ARRAY_DATA_HEADER_INITIALIZER_WITH_OFFSET(len, \
@@ -50,7 +50,11 @@ QT_MOC_LITERAL(14, 149, 12), // "frameCounter"
 QT_MOC_LITERAL(15, 162, 10), // "lidarFront"
 QT_MOC_LITERAL(16, 173, 9), // "lidarBack"
 QT_MOC_LITERAL(17, 183, 9), // "lidarLeft"
-QT_MOC_LITERAL(18, 193, 10) // "lidarRight"
+QT_MOC_LITERAL(18, 193, 10), // "lidarRight"
+QT_MOC_LITERAL(19, 204, 14), // "lidarFrontLeft"
+QT_MOC_LITERAL(20, 219, 15), // "lidarFrontRight"
+QT_MOC_LITERAL(21, 235, 13), // "lidarBackLeft"
+QT_MOC_LITERAL(22, 249, 14) // "lidarBackRight"
 
     },
     "PerceptionClient\0connectedChanged\0\0"
@@ -58,7 +62,9 @@ QT_MOC_LITERAL(18, 193, 10) // "lidarRight"
     "onConnected\0onDisconnected\0connectTo\0"
     "host\0port\0doRegister\0doReset\0connected\0"
     "frameCounter\0lidarFront\0lidarBack\0"
-    "lidarLeft\0lidarRight"
+    "lidarLeft\0lidarRight\0lidarFrontLeft\0"
+    "lidarFrontRight\0lidarBackLeft\0"
+    "lidarBackRight"
 };
 #undef QT_MOC_LITERAL
 
@@ -69,7 +75,7 @@ static const uint qt_meta_data_PerceptionClient[] = {
        0,       // classname
        0,    0, // classinfo
        9,   14, // methods
-       6,   72, // properties
+      10,   72, // properties
        0,    0, // enums/sets
        0,    0, // constructors
        0,       // flags
@@ -112,10 +118,18 @@ static const uint qt_meta_data_PerceptionClient[] = {
       16, QMetaType::Int, 0x00495001,
       17, QMetaType::Int, 0x00495001,
       18, QMetaType::Int, 0x00495001,
+      19, QMetaType::Int, 0x00495001,
+      20, QMetaType::Int, 0x00495001,
+      21, QMetaType::Int, 0x00495001,
+      22, QMetaType::Int, 0x00495001,
 
  // properties: notify_signal_id
        0,
        1,
+       2,
+       2,
+       2,
+       2,
        2,
        2,
        2,
@@ -177,6 +191,10 @@ void PerceptionClient::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int
         case 3: *reinterpret_cast< int*>(_v) = _t->lidarBack(); break;
         case 4: *reinterpret_cast< int*>(_v) = _t->lidarLeft(); break;
         case 5: *reinterpret_cast< int*>(_v) = _t->lidarRight(); break;
+        case 6: *reinterpret_cast< int*>(_v) = _t->lidarFrontLeft(); break;
+        case 7: *reinterpret_cast< int*>(_v) = _t->lidarFrontRight(); break;
+        case 8: *reinterpret_cast< int*>(_v) = _t->lidarBackLeft(); break;
+        case 9: *reinterpret_cast< int*>(_v) = _t->lidarBackRight(); break;
         default: break;
         }
     } else if (_c == QMetaObject::WriteProperty) {
@@ -226,17 +244,17 @@ int PerceptionClient::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     else if (_c == QMetaObject::ReadProperty || _c == QMetaObject::WriteProperty
             || _c == QMetaObject::ResetProperty || _c == QMetaObject::RegisterPropertyMetaType) {
         qt_static_metacall(this, _c, _id, _a);
-        _id -= 6;
+        _id -= 10;
     } else if (_c == QMetaObject::QueryPropertyDesignable) {
-        _id -= 6;
+        _id -= 10;
     } else if (_c == QMetaObject::QueryPropertyScriptable) {
-        _id -= 6;
+        _id -= 10;
     } else if (_c == QMetaObject::QueryPropertyStored) {
-        _id -= 6;
+        _id -= 10;
     } else if (_c == QMetaObject::QueryPropertyEditable) {
-        _id -= 6;
+        _id -= 10;
     } else if (_c == QMetaObject::QueryPropertyUser) {
-        _id -= 6;
+        _id -= 10;
     }
 #endif // QT_NO_PROPERTIES
     return _id;

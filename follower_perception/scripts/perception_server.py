@@ -120,11 +120,12 @@ def serve_loop(conn, frames, perception, *, poll_cmd=None, jpeg_quality=80,
             try:
                 send_frame(conn, buf.tobytes())
                 if lidar_source is not None:                 # LiDAR telemetry (display only)
-                    lv = lidar_source.latest()
-                    if lv is not None:
-                        f, b, l, r = lv
-                        send_frame(conn, b"LIDR %d %d %d %d"
-                                   % (_cm(f), _cm(b), _cm(l), _cm(r)))
+                    s = lidar_source.latest()
+                    if s is not None:                        # order: FL F FR L R BL B BR
+                        send_frame(conn, b"LIDR %d %d %d %d %d %d %d %d" % (
+                            _cm(s["front_left"]), _cm(s["front"]), _cm(s["front_right"]),
+                            _cm(s["left"]),                       _cm(s["right"]),
+                            _cm(s["back_left"]),  _cm(s["back"]), _cm(s["back_right"])))
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
 

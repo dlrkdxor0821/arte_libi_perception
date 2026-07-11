@@ -45,9 +45,10 @@ void PerceptionClient::onReadyRead() {
         m_buf.remove(0, int(4 + n));
         if (payload.startsWith("LIDR ")) {               // LiDAR telemetry, not a frame
             const QList<QByteArray> p = payload.mid(5).split(' ');
-            if (p.size() >= 4) {
-                m_lF = p[0].toInt(); m_lB = p[1].toInt();
-                m_lL = p[2].toInt(); m_lR = p[3].toInt();
+            if (p.size() >= 8) {                          // order: FL F FR L R BL B BR
+                m_lFL = p[0].toInt(); m_lF = p[1].toInt(); m_lFR = p[2].toInt();
+                m_lL  = p[3].toInt();                      m_lR  = p[4].toInt();
+                m_lBL = p[5].toInt(); m_lB = p[6].toInt(); m_lBR = p[7].toInt();
                 emit lidarChanged();
             }
             continue;

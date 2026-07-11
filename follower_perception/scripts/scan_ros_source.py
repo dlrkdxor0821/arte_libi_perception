@@ -11,7 +11,7 @@ robot-local in cmd_bridge).
 import threading
 import time
 
-from scripts.lidar_avoid import sectors4
+from scripts.lidar_avoid import sectors8
 
 
 class ScanRosSource:
@@ -38,10 +38,10 @@ class ScanRosSource:
         self._t.start()
 
     def _on_scan(self, msg):
-        f, b, l, r = sectors4(list(msg.ranges), msg.angle_min,
-                              msg.angle_increment, flip_180=self._flip)
+        s = sectors8(list(msg.ranges), msg.angle_min,
+                     msg.angle_increment, flip_180=self._flip)
         with self._lock:
-            self._latest = (f, b, l, r, time.monotonic())
+            self._latest = (s, time.monotonic())
 
     def _spin(self):
         try:
@@ -50,11 +50,12 @@ class ScanRosSource:
             pass
 
     def latest(self, max_age=1.0):
+        """The eight-sector dict (see lidar_avoid.sectors8), or None if stale."""
         with self._lock:
             v = self._latest
-        if v is None or (time.monotonic() - v[4]) > max_age:
+        if v is None or (time.monotonic() - v[1]) > max_age:
             return None
-        return v[0], v[1], v[2], v[3]
+        return v[0]
 
     def close(self):
         try:
