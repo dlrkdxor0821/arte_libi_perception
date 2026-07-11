@@ -4,7 +4,7 @@ from .color_hist import hsv_hist, hist_similarity
 from .profile import save_profile, load_profile
 from .constants import (
     REID_THRESHOLD, HSV_THRESHOLD,
-    CALIBRATION_ADD_THRESHOLD, MAX_GALLERY_SIZE,
+    CALIBRATION_ADD_THRESHOLD, MAX_GALLERY_SIZE, HSV_UPDATE_ALPHA,
 )
 
 
@@ -126,11 +126,17 @@ class TargetMatcher:
         return owner_tid
 
     def calibrate(self, owner_roi):
+        # ReID: append a novel view to the gallery (discrete angles).
         reid_vec = self.reid.extract(owner_roi)
         best = max((self.reid.similarity(g, reid_vec) for g in self.gallery),
                    default=0.0)
         if best < CALIBRATION_ADD_THRESHOLD and len(self.gallery) < MAX_GALLERY_SIZE:
             self.gallery.append(reid_vec)
+        # HSV: EMA the template toward current lighting (continuous drift).
+        if HSV_UPDATE_ALPHA > 0:
+            cur = hsv_hist(owner_roi)
+            self.template_hsv = ((1.0 - HSV_UPDATE_ALPHA) * self.template_hsv
+                                 + HSV_UPDATE_ALPHA * cur).astype(np.float32)
 
     @staticmethod
     def _crop(frame, bbox):

@@ -158,3 +158,14 @@ def test_load_raises_when_crop_missing_and_mismatch(tmp_path):
     m2 = TargetMatcher(ReIDEngine(backend="colour"))
     with pytest.raises((ValueError, FileNotFoundError)):
         m2.load(d)
+
+
+def test_calibrate_ema_updates_hsv_toward_current():
+    from follower_perception.color_hist import hist_similarity
+    m = _matcher()
+    m.register(_frame((0, 0, 255)))            # red template
+    before = m.template_hsv.copy()
+    m.calibrate(_frame((0, 60, 200)))          # owner under shifted lighting
+    after = m.template_hsv
+    assert not np.array_equal(before, after)   # HSV template moved (online update)
+    assert hist_similarity(before, after) > 0.9  # but only ~10% blended (EMA)
